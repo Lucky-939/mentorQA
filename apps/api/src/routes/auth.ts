@@ -30,7 +30,7 @@ function setRefreshCookie(res: Response, token: string) {
   res.cookie('refresh_token', token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    sameSite: 'lax', // 'strict' blocks cross-origin cookie on POST; lax works for localhost dev
     maxAge: sevenDays,
     path: '/auth', // cookie is only sent to /auth routes
   });
