@@ -1,0 +1,12 @@
+# Normalize line endings to LF on checkout (consistent across Windows/macOS/Linux)
+* text=auto eol=lf
+
+# Explicitly declare binary files
+*.ico binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.woff binary
+*.woff2 binary
