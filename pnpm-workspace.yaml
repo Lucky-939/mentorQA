@@ -1,0 +1,11 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "services/*"
+
+# pnpm 11: explicitly allow postinstall scripts for these trusted packages
+allowBuilds:
+  "@prisma/client": true
+  "@prisma/engines": true
+  "prisma": true
+  "unrs-resolver": true
