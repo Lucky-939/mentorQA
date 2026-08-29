@@ -32,7 +32,7 @@ function setRefreshCookie(res: Response, token: string) {
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax', // 'strict' blocks cross-origin cookie on POST; lax works for localhost dev
     maxAge: sevenDays,
-    path: '/auth', // cookie is only sent to /auth routes
+    path: '/', // allow Next.js middleware to see it on /dashboard
   });
 }
 
