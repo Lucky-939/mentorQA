@@ -1,10 +1,11 @@
 import type { NextConfig } from 'next';
+import path from 'path';
 
 const nextConfig: NextConfig = {
-  // Allow the dashboard page to call the API server
-  // Additional rewrites/proxying can be added in later phases
-  async rewrites() {
-    return [];
+  // Explicitly set the monorepo root so Turbopack doesn't get confused
+  // by apps/web/package-lock.json and apps/api/package-lock.json coexisting.
+  turbopack: {
+    root: path.resolve(__dirname, '../..'),
   },
 };
 
