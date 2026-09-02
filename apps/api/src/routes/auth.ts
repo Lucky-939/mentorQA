@@ -3,9 +3,10 @@ import axios from 'axios';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { prisma } from '../lib/prisma';
+import { encryptToken } from '@mentorqa/db';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 
-export const authRouter = Router();
+export const authRouter: Router = Router();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -61,7 +62,7 @@ authRouter.get('/login', (_req: Request, res: Response) => {
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: process.env.GITHUB_CALLBACK_URL!,
-    scope: 'read:user user:email',
+    scope: 'read:user user:email public_repo',
     state,
   });
 
@@ -126,17 +127,21 @@ authRouter.get('/callback', async (req: Request, res: Response) => {
       emailsResponse.data.find((e) => e.primary && e.verified)?.email ||
       githubUser.email;
 
+    const encryptedToken = encryptToken(githubAccessToken);
+
     // 3. Upsert user in database
     const user = await prisma.user.upsert({
       where: { githubId: String(githubUser.id) },
       update: {
         username: githubUser.login,
         email: primaryEmail,
+        githubAccessToken: encryptedToken,
       },
       create: {
         githubId: String(githubUser.id),
         username: githubUser.login,
         email: primaryEmail,
+        githubAccessToken: encryptedToken,
       },
     });
 
