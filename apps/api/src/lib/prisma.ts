@@ -1,9 +1,9 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@mentorqa/db';
 
 // Prevent multiple Prisma Client instances in development (hot-reload safe)
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
 
-export const prisma =
+export const prisma: PrismaClient =
   globalForPrisma.prisma ||
   new PrismaClient({
     log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],

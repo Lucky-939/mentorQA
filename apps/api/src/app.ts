@@ -4,8 +4,11 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { healthRouter } from './routes/health';
 import { authRouter } from './routes/auth';
+import { reposRouter } from './routes/repos';
+import { jobsRouter } from './routes/jobs';
 
-const app = express();
+import { Express } from "express";
+const app: Express = express();
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 app.use(
@@ -20,6 +23,8 @@ app.use(cookieParser());
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/health', healthRouter);
 app.use('/auth', authRouter);
+app.use('/repos', reposRouter);
+app.use('/jobs', jobsRouter);
 
 // ── 404 catch-all ─────────────────────────────────────────────────────────────
 app.use((_req, res) => {

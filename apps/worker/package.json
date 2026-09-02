@@ -13,7 +13,10 @@
   "dependencies": {
     "@mentorqa/shared-types": "workspace:*",
     "dotenv": "^16.4.7",
-    "ioredis": "^5.4.2"
+    "ioredis": "^5.4.2",
+    "@mentorqa/db": "workspace:*",
+    "bullmq": "^5.34.4",
+    "simple-git": "^3.27.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",
