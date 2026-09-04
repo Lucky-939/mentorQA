@@ -29,11 +29,8 @@ function CallbackHandler() {
   }, [searchParams, router]);
 
   return (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-      <div className="flex flex-col items-center gap-4 text-white">
-        <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-        <p className="text-gray-400">Completing sign-in…</p>
-      </div>
+    <div className="min-h-screen bg-brutal-bg flex items-center justify-center font-mono text-brutal-primary uppercase tracking-widest">
+      [ AUTHENTICATING... ]
     </div>
   );
 }
@@ -42,8 +39,8 @@ export default function AuthCallbackPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-          <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+        <div className="min-h-screen bg-brutal-bg flex items-center justify-center font-mono text-brutal-primary uppercase tracking-widest">
+          [ AUTHENTICATING... ]
         </div>
       }
     >

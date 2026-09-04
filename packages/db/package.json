@@ -8,6 +8,7 @@
     "build": "tsc",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
+    "postinstall": "prisma generate",
     "clean": "rimraf dist"
   },
   "dependencies": {

@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import Redis from 'ioredis';
 import { Worker, Job as BullJob } from 'bullmq';
-import { PrismaClient, decryptToken } from '@mentorqa/db';
+import { PrismaClient, decryptToken, Prisma } from '@mentorqa/db';
 import simpleGit from 'simple-git';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -46,7 +46,7 @@ async function detectStack(repoPath: string): Promise<{ languages: string[], fra
   return stack;
 }
 
-async function processJob(job: BullJob) {
+export async function processJob(job: BullJob) {
   const { jobId, repositoryId, userId } = job.data;
   console.log(`[Job ${jobId}] Starting processing for repository ${repositoryId}...`);
 
@@ -70,7 +70,7 @@ async function processJob(job: BullJob) {
     const git = simpleGit();
     const cloneUrl = `https://x-access-token:${token}@github.com/${repo.name}.git`;
     
-    await git.clone(cloneUrl, tempDir, ['--depth=1']);
+    await git.clone(cloneUrl, tempDir, ['--depth=1', '--branch=feature/phase-1']);
     
     await prisma.job.update({ where: { id: jobId }, data: { status: 'cloned' } });
     console.log(`[Job ${jobId}] Status: cloned`);
@@ -85,8 +85,43 @@ async function processJob(job: BullJob) {
     await prisma.job.update({ where: { id: jobId }, data: { status: 'stack-detected' } });
     console.log(`[Job ${jobId}] Status: stack-detected`);
 
-    await prisma.job.update({ where: { id: jobId }, data: { status: 'done' } });
-    console.log(`[Job ${jobId}] Status: done`);
+    // Phase 2: Static Analysis
+    await prisma.job.update({ where: { id: jobId }, data: { status: 'analyzing-static' } });
+    console.log(`[Job ${jobId}] Status: analyzing-static`);
+
+    let staticFindings: Prisma.InputJsonValue[] = [];
+    let analysisSuccess = false;
+    
+    try {
+      const response = await fetch('http://127.0.0.1:8000/analyze/static', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repoPath: tempDir, detectedStack: stack })
+      });
+      if (!response.ok) {
+        throw new Error(`Analysis service HTTP ${response.status}`);
+      }
+      const data = await response.json() as { findings?: Prisma.InputJsonValue[] };
+      staticFindings = data.findings || [];
+      analysisSuccess = true;
+    } catch (analysisErr) {
+      console.error(`[Job ${jobId}] Analysis service down or error:`, analysisErr);
+    }
+
+    // Save findings to Review model
+    await prisma.review.upsert({
+      where: { jobId },
+      update: { staticAnalysis: staticFindings },
+      create: { jobId, staticAnalysis: staticFindings }
+    });
+
+    if (analysisSuccess) {
+      await prisma.job.update({ where: { id: jobId }, data: { status: 'done' } });
+      console.log(`[Job ${jobId}] Status: done`);
+    } else {
+      await prisma.job.update({ where: { id: jobId }, data: { status: 'static analysis failed' } });
+      console.log(`[Job ${jobId}] Status: static analysis failed`);
+    }
 
   } catch (err: unknown) {
     const error = err as Error;
@@ -94,10 +129,13 @@ async function processJob(job: BullJob) {
     await prisma.job.update({ where: { id: jobId }, data: { status: 'failed' } });
     throw error;
   } finally {
-    // For Phase 1, we are instructed to keep it, but normally we would delete.
-    // Spec: "(not committed, cleaned up after use — for now clone but don't delete yet, so we can inspect it while testing)."
     if (tempDir) {
-      console.log(`[Job ${jobId}] Temp dir retained at: ${tempDir}`);
+      try {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+        console.log(`[Job ${jobId}] Temp dir cleaned up: ${tempDir}`);
+      } catch (rmErr) {
+        console.error(`[Job ${jobId}] Failed to clean temp dir:`, rmErr);
+      }
     }
   }
 }

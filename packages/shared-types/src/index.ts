@@ -36,3 +36,18 @@ export interface AuthUser {
   username: string;
   email: string | null;
 }
+
+export type FindingCategory = 'code-smell' | 'security' | 'complexity' | 'architecture' | 'test-coverage' | 'api' | 'performance';
+export type FindingSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+
+export interface Finding {
+  id: string;
+  category: FindingCategory;
+  severity: FindingSeverity;
+  file: string;
+  lineStart: number;
+  lineEnd: number;
+  message: string;
+  ruleId: string;
+  metadata?: Record<string, any>;
+}
