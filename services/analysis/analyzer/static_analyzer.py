@@ -51,6 +51,19 @@ def analyze_python_file(filepath: str, repo_path: str) -> List[Finding]:
                 message=f"Control flow statement found ({node.type}) - consider simplifying if deeply nested.",
                 ruleId="py-complexity-heuristic"
             ))
+        elif node.type == "function_definition":
+            lines = node.end_point[0] - node.start_point[0]
+            if lines > 50:
+                findings.append(Finding(
+                    id=str(uuid.uuid4()),
+                    category="code-smell",
+                    severity="medium",
+                    file=os.path.relpath(filepath, repo_path).replace("\\", "/"),
+                    lineStart=node.start_point[0] + 1,
+                    lineEnd=node.end_point[0] + 1,
+                    message=f"Function is too long ({lines} lines).",
+                    ruleId="py-long-function"
+                ))
         for child in node.children:
             traverse(child)
 

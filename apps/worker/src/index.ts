@@ -70,7 +70,7 @@ export async function processJob(job: BullJob) {
     const git = simpleGit();
     const cloneUrl = `https://x-access-token:${token}@github.com/${repo.name}.git`;
     
-    await git.clone(cloneUrl, tempDir, ['--depth=1']);
+    await git.clone(cloneUrl, tempDir, ['--depth=1', '--branch=feature/phase-1']);
     
     await prisma.job.update({ where: { id: jobId }, data: { status: 'cloned' } });
     console.log(`[Job ${jobId}] Status: cloned`);
