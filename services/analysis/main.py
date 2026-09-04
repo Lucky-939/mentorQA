@@ -19,12 +19,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 class AnalyzeStaticRequest(BaseModel):
     repoPath: str
     detectedStack: Dict[str, Any]
 
+
 class AnalyzeStaticResponse(BaseModel):
     findings: List[Finding]
+
 
 @app.get("/health")
 async def health_check():
@@ -33,6 +36,7 @@ async def health_check():
         "service": "mentorqa-analysis",
         "version": "0.1.0",
     }
+
 
 @app.post("/analyze/static", response_model=AnalyzeStaticResponse)
 async def analyze_static(req: AnalyzeStaticRequest):
