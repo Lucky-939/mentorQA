@@ -51,7 +51,8 @@ def analyze_python_file(filepath: str, repo_path: str) -> List[Finding]:
                     file=os.path.relpath(filepath, repo_path).replace("\\", "/"),
                     lineStart=node.start_point[0] + 1,
                     lineEnd=node.end_point[0] + 1,
-                    message=f"Control flow statement found ({node.type}) - consider simplifying if deeply nested.",
+                    message=f"Control flow statement found ({node.type}) - "
+                            f"consider simplifying if deeply nested.",
                     ruleId="py-complexity-heuristic",
                 )
             )
