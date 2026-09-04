@@ -101,7 +101,7 @@ export async function processJob(job: BullJob) {
       if (!response.ok) {
         throw new Error(`Analysis service HTTP ${response.status}`);
       }
-      const data: any = await response.json();
+      const data = await response.json() as { findings?: unknown[] };
       staticFindings = data.findings || [];
       analysisSuccess = true;
     } catch (analysisErr) {
