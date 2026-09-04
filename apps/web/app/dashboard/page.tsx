@@ -163,8 +163,8 @@ export default function DashboardPage() {
           if (body.data.repository?.detectedStack) {
             setDetectedStack(body.data.repository.detectedStack);
           }
-          if (body.data.review?.staticAnalysis) {
-            setJobFindings(body.data.review.staticAnalysis);
+          if (body.data.review?.findings) {
+            setJobFindings(body.data.review.findings);
           }
           if (body.data.status === 'done' || body.data.status === 'failed' || body.data.status === 'static analysis failed') {
             clearInterval(interval);

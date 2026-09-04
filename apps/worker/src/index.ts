@@ -111,8 +111,8 @@ export async function processJob(job: BullJob) {
     // Save findings to Review model
     await prisma.review.upsert({
       where: { jobId },
-      update: { staticAnalysis: staticFindings },
-      create: { jobId, staticAnalysis: staticFindings }
+      update: { findings: staticFindings },
+      create: { jobId, findings: staticFindings }
     });
 
     if (analysisSuccess) {
