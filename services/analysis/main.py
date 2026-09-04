@@ -1,9 +1,10 @@
+from typing import Any, Dict, List
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Dict, Any
 
-from analyzer.static_analyzer import run_static_analysis, Finding
+from analyzer.static_analyzer import Finding, run_static_analysis
 
 app = FastAPI(
     title="MentorQA Analysis Service",
