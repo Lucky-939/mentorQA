@@ -39,6 +39,17 @@ jobs:
       - name: Build all workspaces
         run: pnpm turbo build
 
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'corretto'
+          java-version: '17'
+          cache: 'maven'
+
+      - name: Build Java Analyzer
+        run: mvn clean package
+        working-directory: apps/java-analyzer
+
       - name: Setup Python (for analysis service)
         uses: actions/setup-python@v5
         with:

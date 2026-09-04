@@ -4,6 +4,7 @@ WORKDIR /app
 
 # Install dependencies first for layer caching
 COPY requirements.txt ./
+RUN apt-get update && apt-get install -y default-jre && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code

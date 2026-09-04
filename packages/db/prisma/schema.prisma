@@ -44,6 +44,19 @@ model Job {
   updatedAt    DateTime @updatedAt
 
   repository   Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  review       Review?
 
   @@map("jobs")
+}
+
+model Review {
+  id             String   @id @default(cuid())
+  jobId          String   @unique
+  staticAnalysis Json?    // Will hold Array of Finding objects
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  job            Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("reviews")
 }

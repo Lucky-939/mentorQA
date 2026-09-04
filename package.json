@@ -2,7 +2,7 @@
   "name": "mentorqa",
   "private": true,
   "scripts": {
-    "dev": "turbo run dev --parallel",
+    "dev": "pnpm -r --parallel dev",
     "build": "turbo run build",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",

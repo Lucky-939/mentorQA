@@ -1,61 +1,36 @@
 import 'dotenv/config';
-import Redis from 'ioredis';
-import { Worker, Job as BullJob } from 'bullmq';
 import { PrismaClient, decryptToken } from '@mentorqa/db';
 import simpleGit from 'simple-git';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const prisma = new PrismaClient();
 
 async function detectStack(repoPath: string): Promise<{ languages: string[], frameworks: string[] }> {
   const stack = { languages: [] as string[], frameworks: [] as string[] };
-  
   const hasFile = (filename: string) => fs.existsSync(path.join(repoPath, filename));
 
   if (hasFile('package.json')) {
     stack.languages.push('JavaScript/TypeScript');
-    const pkg = JSON.parse(fs.readFileSync(path.join(repoPath, 'package.json'), 'utf8'));
-    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-    if (deps['react']) stack.frameworks.push('React');
-    if (deps['next']) stack.frameworks.push('Next.js');
-    if (deps['express']) stack.frameworks.push('Express');
-    if (deps['vue']) stack.frameworks.push('Vue');
   }
-
   if (hasFile('requirements.txt') || hasFile('pyproject.toml') || hasFile('Pipfile')) {
     stack.languages.push('Python');
-    if (hasFile('requirements.txt')) {
-      const reqs = fs.readFileSync(path.join(repoPath, 'requirements.txt'), 'utf8');
-      if (reqs.includes('Django')) stack.frameworks.push('Django');
-      if (reqs.includes('Flask')) stack.frameworks.push('Flask');
-      if (reqs.includes('fastapi')) stack.frameworks.push('FastAPI');
-    }
   }
-
   if (hasFile('pom.xml') || hasFile('build.gradle')) {
     stack.languages.push('Java');
-    if (hasFile('pom.xml')) {
-      const pom = fs.readFileSync(path.join(repoPath, 'pom.xml'), 'utf8');
-      if (pom.includes('spring-boot')) stack.frameworks.push('Spring Boot');
-    }
   }
-
   return stack;
 }
 
-export async function processJob(job: BullJob) {
+async function processJob(job: any) {
   const { jobId, repositoryId, userId } = job.data;
   console.log(`[Job ${jobId}] Starting processing for repository ${repositoryId}...`);
-
   let tempDir: string | null = null;
   
   try {
     const user = await prisma.user.findUnique({ where: { id: userId } });
     const repo = await prisma.repository.findUnique({ where: { id: repositoryId } });
-
     if (!user || !user.githubAccessToken) throw new Error('User or GitHub token missing');
     if (!repo) throw new Error('Repository missing');
 
@@ -63,8 +38,6 @@ export async function processJob(job: BullJob) {
     console.log(`[Job ${jobId}] Status: cloning`);
 
     const token = decryptToken(user.githubAccessToken);
-    
-    // Setup isolated temp directory
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `mentorqa-job-${jobId}-`));
     
     const git = simpleGit();
@@ -76,16 +49,11 @@ export async function processJob(job: BullJob) {
     console.log(`[Job ${jobId}] Status: cloned`);
 
     const stack = await detectStack(tempDir);
-
-    await prisma.repository.update({
-      where: { id: repositoryId },
-      data: { detectedStack: stack },
-    });
+    await prisma.repository.update({ where: { id: repositoryId }, data: { detectedStack: stack } });
 
     await prisma.job.update({ where: { id: jobId }, data: { status: 'stack-detected' } });
     console.log(`[Job ${jobId}] Status: stack-detected`);
 
-    // Phase 2: Static Analysis
     await prisma.job.update({ where: { id: jobId }, data: { status: 'analyzing-static' } });
     console.log(`[Job ${jobId}] Status: analyzing-static`);
 
@@ -98,17 +66,14 @@ export async function processJob(job: BullJob) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ repoPath: tempDir, detectedStack: stack })
       });
-      if (!response.ok) {
-        throw new Error(`Analysis service HTTP ${response.status}`);
-      }
-      const data: any = await response.json();
+      if (!response.ok) throw new Error(`Analysis service HTTP ${response.status}`);
+      const data = (await response.json()) as any;
       staticFindings = data.findings || [];
       analysisSuccess = true;
     } catch (analysisErr) {
       console.error(`[Job ${jobId}] Analysis service down or error:`, analysisErr);
     }
 
-    // Save findings to Review model
     await prisma.review.upsert({
       where: { jobId },
       update: { staticAnalysis: staticFindings },
@@ -130,50 +95,34 @@ export async function processJob(job: BullJob) {
     throw error;
   } finally {
     if (tempDir) {
-      try {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-        console.log(`[Job ${jobId}] Temp dir cleaned up: ${tempDir}`);
-      } catch (rmErr) {
-        console.error(`[Job ${jobId}] Failed to clean temp dir:`, rmErr);
-      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      console.log(`[Job ${jobId}] Temp dir cleaned up: ${tempDir}`);
     }
   }
 }
 
-async function main() {
-  console.log('🔄 MentorQA Worker starting...');
-  await prisma.$connect();
-  console.log('✅ Database connected');
+async function run(repoName: string) {
+  const repo = await prisma.repository.findFirst({ where: { name: repoName } });
+  if (!repo) throw new Error("Repo not found: " + repoName);
+  const job = await prisma.job.findFirst({ where: { repositoryId: repo.id }, orderBy: { createdAt: 'desc' } });
+  if (!job) throw new Error("Job not found for " + repoName);
 
-  const redis = new Redis(REDIS_URL, {
-    maxRetriesPerRequest: null,
-  });
-
-  const worker = new Worker('review-pipeline', processJob, { connection: redis });
-
-  worker.on('completed', (job) => {
-    console.log(`✅ Job ${job.id} has completed!`);
-  });
-
-  worker.on('failed', (job, err) => {
-    console.error(`❌ Job ${job?.id} has failed with ${err.message}`);
-  });
-
-  console.log('✅ Worker ready — listening for jobs on "review-pipeline"');
-
-  const shutdown = async () => {
-    console.log('\nShutting down worker...');
-    await worker.close();
-    await prisma.$disconnect();
-    await redis.quit();
-    process.exit(0);
-  };
-
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
+  const bullJob = { data: { jobId: job.id, repositoryId: repo.id, userId: repo.ownerId } };
+  try {
+    await processJob(bullJob);
+    console.log("processJob finished successfully for " + repoName);
+    const review = await prisma.review.findUnique({ where: { jobId: job.id } });
+    console.log(`[${repoName}] Review findings count:`, review?.staticAnalysis ? (review.staticAnalysis as any[]).length : 0);
+  } catch (err) {
+    console.error(`processJob failed for ${repoName}`, err);
+  }
 }
 
-main().catch((err) => {
-  console.error('Worker fatal error:', err);
-  process.exit(1);
-});
+async function main() {
+  await prisma.$connect();
+  await run('Lucky-939/mentorQA'); // JS/TS + Python
+  await run('junit-team/junit4'); // Java
+  await prisma.$disconnect();
+}
+
+main().catch(console.error);

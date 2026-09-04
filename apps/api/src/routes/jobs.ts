@@ -16,7 +16,8 @@ jobsRouter.get('/:id', requireAuth, async (req: AuthRequest, res: Response) => {
       include: {
         repository: {
           select: { name: true, detectedStack: true }
-        }
+        },
+        review: true
       }
     });
 

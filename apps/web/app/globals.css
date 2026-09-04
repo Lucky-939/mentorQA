@@ -1,26 +1,62 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --color-brutal-bg: #141414;
+  --color-brutal-panel: #0a0a0a;
+  --color-brutal-border: #3f3f46;
+  --color-brutal-primary: #fafafa;
+  /* Bumped lightness slightly for better contrast */
+  --color-brutal-secondary: #d4d4d8; 
+  --color-brutal-muted: #a1a1aa;     
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
+  --color-brutal-bg: var(--color-brutal-bg);
+  --color-brutal-panel: var(--color-brutal-panel);
+  --color-brutal-border: var(--color-brutal-border);
+  --color-brutal-primary: var(--color-brutal-primary);
+  --color-brutal-secondary: var(--color-brutal-secondary);
+  --color-brutal-muted: var(--color-brutal-muted);
+  
+  --font-sans: var(--font-inter);
   --font-mono: var(--font-geist-mono);
+
+  /* Force all radius utilities to 0 per user instruction */
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-2xl: 0px;
+  --radius-3xl: 0px;
+  --radius-full: 0px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* Explicit Typography Scale */
+@utility text-type-h1 {
+  @apply text-4xl md:text-5xl font-bold tracking-tight text-brutal-primary leading-tight;
+}
+
+@utility text-type-h2 {
+  @apply text-3xl font-bold tracking-tight text-brutal-primary leading-tight;
+}
+
+@utility text-type-body {
+  @apply text-base md:text-lg text-brutal-secondary leading-relaxed;
+}
+
+@utility text-type-label {
+  @apply uppercase tracking-widest text-brutal-muted text-xs font-bold;
+}
+
+@utility text-type-button {
+  @apply font-bold text-base uppercase tracking-widest;
+}
+
+@utility text-type-meta {
+  @apply text-[10px] md:text-sm font-mono whitespace-nowrap overflow-hidden text-ellipsis;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-brutal-bg);
+  color: var(--color-brutal-primary);
 }
