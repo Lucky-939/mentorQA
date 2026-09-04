@@ -6,9 +6,12 @@ import simpleGit from 'simple-git';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { generateTestWithGemini, KeyFunction } from './testGenerator';
+import { setupSandbox, executeTest } from './sandbox';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const prisma = new PrismaClient();
+const redis = new Redis(REDIS_URL, { maxRetriesPerRequest: null });
 
 async function detectStack(repoPath: string): Promise<{ languages: string[], frameworks: string[] }> {
   const stack = { languages: [] as string[], frameworks: [] as string[] };
@@ -90,6 +93,7 @@ export async function processJob(job: BullJob) {
     console.log(`[Job ${jobId}] Status: analyzing-static`);
 
     let staticFindings: Prisma.InputJsonValue[] = [];
+    let keyFunctions: KeyFunction[] = [];
     let analysisSuccess = false;
     
     try {
@@ -101,18 +105,118 @@ export async function processJob(job: BullJob) {
       if (!response.ok) {
         throw new Error(`Analysis service HTTP ${response.status}`);
       }
-      const data = await response.json() as { findings?: Prisma.InputJsonValue[] };
+      const data = await response.json() as { findings?: Prisma.InputJsonValue[], keyFunctions?: KeyFunction[] };
       staticFindings = data.findings || [];
+      keyFunctions = data.keyFunctions || [];
       analysisSuccess = true;
     } catch (analysisErr) {
       console.error(`[Job ${jobId}] Analysis service down or error:`, analysisErr);
     }
 
+    // Phase 3: AI Test Generation
+    await prisma.job.update({ where: { id: jobId }, data: { status: 'generating-tests' } });
+    console.log(`[Job ${jobId}] Status: generating-tests`);
+
+    const testFindings: Prisma.InputJsonValue[] = [];
+    const maxFunctions = parseInt(process.env.GEMINI_MAX_FUNCTIONS_PER_RUN || '15', 10);
+    const geminiApiKey = process.env.GEMINI_API_KEY;
+
+    if (!geminiApiKey) {
+      console.log(`[Job ${jobId}] GEMINI_API_KEY missing. Skipping test generation.`);
+      testFindings.push({
+        id: crypto.randomUUID(),
+        category: "test-coverage",
+        severity: "low",
+        file: "Project",
+        lineStart: 0,
+        lineEnd: 0,
+        message: "No test coverage (skipped due to missing AI config).",
+        ruleId: "skipped-tests-no-key"
+      });
+    } else {
+      const targetFunctions = keyFunctions.slice(0, maxFunctions);
+      
+      let aiAvailable = true;
+      let setupDone = false;
+
+      for (const func of targetFunctions) {
+        if (!aiAvailable) {
+          testFindings.push({
+            id: crypto.randomUUID(),
+            category: "test-coverage",
+            severity: "low",
+            file: func.file,
+            lineStart: 0,
+            lineEnd: 0,
+            message: "No test coverage (skipped due to rate limit/AI unavailable).",
+            ruleId: "skipped-tests-ai-down"
+          });
+          continue;
+        }
+
+        try {
+          const testCode = await generateTestWithGemini(func, redis, geminiApiKey);
+          if (testCode) {
+            // Setup sandbox once if we have tests to run
+            if (!setupDone) {
+              try {
+                await setupSandbox(tempDir, stack);
+              } catch (setupErr) {
+                console.warn(`[Job ${jobId}] Sandbox setup failed:`, setupErr);
+              }
+              setupDone = true;
+            }
+
+            const result = await executeTest(tempDir, func, testCode);
+            testFindings.push({
+              id: crypto.randomUUID(),
+              category: "test-coverage",
+              severity: result.passed ? "info" : "medium",
+              file: func.file,
+              lineStart: 0,
+              lineEnd: 0,
+              message: result.message,
+              ruleId: result.passed ? "generated-test-passed" : "generated-test-failed"
+            });
+          }
+        } catch (err: unknown) {
+          const error = err as Error;
+          console.error(`[Job ${jobId}] Gemini/Sandbox error for ${func.name}:`, error.message);
+          if (error.message.includes('429') || error.message.includes('API Error')) {
+            aiAvailable = false;
+            testFindings.push({
+              id: crypto.randomUUID(),
+              category: "test-coverage",
+              severity: "low",
+              file: func.file,
+              lineStart: 0,
+              lineEnd: 0,
+              message: "No test coverage (skipped due to AI unavailability or 429).",
+              ruleId: "skipped-tests-ai-down"
+            });
+          } else {
+             testFindings.push({
+              id: crypto.randomUUID(),
+              category: "test-coverage",
+              severity: "low",
+              file: func.file,
+              lineStart: 0,
+              lineEnd: 0,
+              message: `No test coverage (error during generation: ${error.message}).`,
+              ruleId: "skipped-tests-error"
+            });
+          }
+        }
+      }
+    }
+
+    const allFindings = [...staticFindings, ...testFindings];
+
     // Save findings to Review model
     await prisma.review.upsert({
       where: { jobId },
-      update: { findings: staticFindings },
-      create: { jobId, findings: staticFindings }
+      update: { findings: allFindings },
+      create: { jobId, findings: allFindings }
     });
 
     if (analysisSuccess) {
@@ -144,10 +248,6 @@ async function main() {
   console.log('🔄 MentorQA Worker starting...');
   await prisma.$connect();
   console.log('✅ Database connected');
-
-  const redis = new Redis(REDIS_URL, {
-    maxRetriesPerRequest: null,
-  });
 
   const worker = new Worker('review-pipeline', processJob, { connection: redis });
 
