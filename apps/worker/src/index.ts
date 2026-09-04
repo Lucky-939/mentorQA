@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import Redis from 'ioredis';
 import { Worker, Job as BullJob } from 'bullmq';
-import { PrismaClient, decryptToken } from '@mentorqa/db';
+import { PrismaClient, decryptToken, Prisma } from '@mentorqa/db';
 import simpleGit from 'simple-git';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -89,7 +89,7 @@ export async function processJob(job: BullJob) {
     await prisma.job.update({ where: { id: jobId }, data: { status: 'analyzing-static' } });
     console.log(`[Job ${jobId}] Status: analyzing-static`);
 
-    let staticFindings = [];
+    let staticFindings: Prisma.InputJsonValue[] = [];
     let analysisSuccess = false;
     
     try {
@@ -101,7 +101,7 @@ export async function processJob(job: BullJob) {
       if (!response.ok) {
         throw new Error(`Analysis service HTTP ${response.status}`);
       }
-      const data = await response.json() as { findings?: unknown[] };
+      const data = await response.json() as { findings?: Prisma.InputJsonValue[] };
       staticFindings = data.findings || [];
       analysisSuccess = true;
     } catch (analysisErr) {
