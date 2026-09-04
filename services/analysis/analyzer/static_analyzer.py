@@ -23,6 +23,15 @@ class Finding(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
 
+class KeyFunction(BaseModel):
+    id: str
+    name: str
+    file: str
+    language: str
+    source: str
+    signature: str
+
+
 def get_parser(language_module) -> Parser:
     lang = Language(language_module.language())
     parser = Parser()
@@ -30,14 +39,15 @@ def get_parser(language_module) -> Parser:
     return parser
 
 
-def analyze_python_file(filepath: str, repo_path: str) -> List[Finding]:
+def analyze_python_file(filepath: str, repo_path: str) -> tuple[List[Finding], List[KeyFunction]]:
     findings = []
+    key_functions = []
     parser = get_parser(tspython)
     try:
         with open(filepath, "r", encoding="utf-8") as f:
             code = f.read()
     except Exception:
-        return []
+        return [], []
 
     tree = parser.parse(bytes(code, "utf8"))
 
@@ -71,15 +81,36 @@ def analyze_python_file(filepath: str, repo_path: str) -> List[Finding]:
                         ruleId="py-long-function",
                     )
                 )
+            
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                func_name = name_node.text.decode("utf-8")
+                func_source = code.encode("utf-8")[node.start_byte:node.end_byte].decode("utf-8")
+                # grab the first line for signature
+                func_sig = func_source.split('\n')[0].strip()
+                key_functions.append(
+                    KeyFunction(
+                        id=str(uuid.uuid4()),
+                        name=func_name,
+                        file=os.path.relpath(filepath, repo_path).replace("\\", "/"),
+                        language="python",
+                        source=func_source,
+                        signature=func_sig
+                    )
+                )
+
         for child in node.children:
             traverse(child)
 
     traverse(tree.root_node)
-    return findings
+    return findings, key_functions
 
 
-def analyze_js_ts_file(filepath: str, repo_path: str, is_ts: bool) -> List[Finding]:
+def analyze_js_ts_file(
+    filepath: str, repo_path: str, is_ts: bool
+) -> tuple[List[Finding], List[KeyFunction]]:
     findings = []
+    key_functions = []
 
     if is_ts:
         lang = Language(tstypescript.language_typescript())
@@ -92,7 +123,7 @@ def analyze_js_ts_file(filepath: str, repo_path: str, is_ts: bool) -> List[Findi
         with open(filepath, "r", encoding="utf-8") as f:
             code = f.read()
     except Exception:
-        return []
+        return [], []
 
     tree = parser.parse(bytes(code, "utf8"))
 
@@ -112,6 +143,23 @@ def analyze_js_ts_file(filepath: str, repo_path: str, is_ts: bool) -> List[Findi
                         ruleId="js-long-function",
                     )
                 )
+            
+            name_node = node.child_by_field_name("name")
+            func_name = name_node.text.decode("utf-8") if name_node else "anonymous"
+            if func_name != "anonymous" or node.type == "arrow_function":
+                func_source = code.encode("utf-8")[node.start_byte:node.end_byte].decode("utf-8")
+                func_sig = func_source.split('\n')[0].strip()
+                key_functions.append(
+                    KeyFunction(
+                        id=str(uuid.uuid4()),
+                        name=func_name,
+                        file=os.path.relpath(filepath, repo_path).replace("\\", "/"),
+                        language="typescript" if is_ts else "javascript",
+                        source=func_source,
+                        signature=func_sig
+                    )
+                )
+
         # Simple security check for eval()
         if node.type == "call_expression":
             function_name_node = node.child_by_field_name("function")
@@ -133,11 +181,12 @@ def analyze_js_ts_file(filepath: str, repo_path: str, is_ts: bool) -> List[Findi
             traverse(child)
 
     traverse(tree.root_node)
-    return findings
+    return findings, key_functions
 
 
-def analyze_java_with_jar(repo_path: str) -> List[Finding]:
+def analyze_java_with_jar(repo_path: str) -> tuple[List[Finding], List[KeyFunction]]:
     findings = []
+    key_functions = []
     jar_path = os.path.abspath(
         os.path.join(
             os.path.dirname(__file__),
@@ -147,7 +196,7 @@ def analyze_java_with_jar(repo_path: str) -> List[Finding]:
 
     if not os.path.exists(jar_path):
         print(f"Java analyzer JAR not found at {jar_path}")
-        return findings
+        return findings, key_functions
 
     try:
         result = subprocess.run(
@@ -166,23 +215,34 @@ def analyze_java_with_jar(repo_path: str) -> List[Finding]:
     except subprocess.CalledProcessError as e:
         print(f"Java analyzer failed: {e.stderr}")
 
-    return findings
+    return findings, key_functions
 
 
-def run_static_analysis(repo_path: str, detected_stack: dict) -> List[Finding]:
+def run_static_analysis(
+    repo_path: str, detected_stack: dict
+) -> tuple[List[Finding], List[KeyFunction]]:
     findings = []
+    key_functions = []
 
     if "Java" in detected_stack.get("languages", []):
-        findings.extend(analyze_java_with_jar(repo_path))
+        f, k = analyze_java_with_jar(repo_path)
+        findings.extend(f)
+        key_functions.extend(k)
 
     for root, _, files in os.walk(repo_path):
         for file in files:
             filepath = os.path.join(root, file)
             if file.endswith(".py"):
-                findings.extend(analyze_python_file(filepath, repo_path))
+                f, k = analyze_python_file(filepath, repo_path)
+                findings.extend(f)
+                key_functions.extend(k)
             elif file.endswith(".js") or file.endswith(".jsx"):
-                findings.extend(analyze_js_ts_file(filepath, repo_path, False))
+                f, k = analyze_js_ts_file(filepath, repo_path, False)
+                findings.extend(f)
+                key_functions.extend(k)
             elif file.endswith(".ts") or file.endswith(".tsx"):
-                findings.extend(analyze_js_ts_file(filepath, repo_path, True))
+                f, k = analyze_js_ts_file(filepath, repo_path, True)
+                findings.extend(f)
+                key_functions.extend(k)
 
-    return findings
+    return findings, key_functions

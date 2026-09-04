@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from analyzer.static_analyzer import Finding, run_static_analysis
+from analyzer.static_analyzer import Finding, KeyFunction, run_static_analysis
 
 app = FastAPI(
     title="MentorQA Analysis Service",
@@ -28,6 +28,7 @@ class AnalyzeStaticRequest(BaseModel):
 
 class AnalyzeStaticResponse(BaseModel):
     findings: List[Finding]
+    keyFunctions: List[KeyFunction]
 
 
 @app.get("/health")
@@ -42,7 +43,7 @@ async def health_check():
 @app.post("/analyze/static", response_model=AnalyzeStaticResponse)
 async def analyze_static(req: AnalyzeStaticRequest):
     try:
-        findings = run_static_analysis(req.repoPath, req.detectedStack)
-        return AnalyzeStaticResponse(findings=findings)
+        findings, key_functions = run_static_analysis(req.repoPath, req.detectedStack)
+        return AnalyzeStaticResponse(findings=findings, keyFunctions=key_functions)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
