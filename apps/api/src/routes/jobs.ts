@@ -74,8 +74,8 @@ jobsRouter.get('/:id/graph', requireAuth, async (req: AuthRequest, res: Response
         { repositoryId: job.repositoryId }
       );
 
-      const nodes = nodesRes.records.map(r => r.get('node'));
-      const edges = edgesRes.records.map(r => ({
+      const nodes = nodesRes.records.map((r: any) => r.get('node'));
+      const edges = edgesRes.records.map((r: any) => ({
         source: r.get('source'),
         target: r.get('target'),
         relationship: r.get('relationship')

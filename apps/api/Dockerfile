@@ -2,18 +2,26 @@
 FROM node:24-alpine AS builder
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 RUN corepack enable
 
 WORKDIR /app
 
-# Copy the entire monorepo
-COPY . .
+# Copy package manifests first for better layer caching
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/api/package.json apps/api/
+COPY apps/worker/package.json apps/worker/
+COPY apps/web/package.json apps/web/
+COPY packages/db/package.json packages/db/
+COPY packages/shared-types/package.json packages/shared-types/
 
-# Skip puppeteer browser download (not needed in API container)
-ENV PUPPETEER_SKIP_DOWNLOAD=true
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-# Install all dependencies (dev included) using frozen lockfile
-RUN pnpm install --frozen-lockfile
+# Install with BuildKit cache mount so re-builds don't re-download
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm install --frozen-lockfile
+
+# Copy the rest of the source
+COPY . .
 
 # Generate Prisma Client in the shared packages/db
 RUN pnpm --filter @mentorqa/db run prisma:generate
@@ -26,7 +34,6 @@ RUN pnpm --filter @mentorqa/api run build
 RUN pnpm deploy --filter @mentorqa/api --prod --legacy /prod/api
 
 # Re-generate Prisma Client in the deployed bundle
-# pnpm deploy copies the source of local workspace packages, but we need to generate Prisma client again
 RUN cd /prod/api && npx prisma generate --schema=node_modules/@mentorqa/db/prisma/schema.prisma
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
