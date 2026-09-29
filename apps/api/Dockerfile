@@ -27,7 +27,7 @@ RUN pnpm --filter @mentorqa/db run build
 RUN pnpm --filter @mentorqa/api run build
 
 # Deploy isolated production bundle for the API
-RUN pnpm deploy --filter @mentorqa/api --prod --legacy /prod/api
+RUN pnpm deploy --filter @mentorqa/api --prod /prod/api
 
 # Re-generate Prisma Client inside the deployed bundle
 RUN cd /prod/api && npx prisma generate --schema=node_modules/@mentorqa/db/prisma/schema.prisma
