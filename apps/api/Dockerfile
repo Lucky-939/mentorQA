@@ -9,6 +9,9 @@ WORKDIR /app
 # Copy the entire monorepo
 COPY . .
 
+# Skip puppeteer browser download (not needed in API container)
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 # Install all dependencies (dev included) using frozen lockfile
 RUN pnpm install --frozen-lockfile
 
