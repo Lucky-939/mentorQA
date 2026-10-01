@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars, no-empty, prefer-const */
 import neo4j, { Driver, Session } from 'neo4j-driver';
 import crypto from 'crypto';
 

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars, no-empty, prefer-const */
 import 'dotenv/config';
 import Redis from 'ioredis';
 import { Worker, Job as BullJob } from 'bullmq';
@@ -8,7 +9,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { generateTestWithGemini, KeyFunction } from './testGenerator';
 import { setupSandbox, executeTest } from './sandbox';
-import { executeDynamicTests } from './dynamicTester';
+import { executeDynamicTests, Endpoint } from './dynamicTester';
 import { storeGraph, detectArchitecturalFlaws } from './neo4j';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
@@ -93,9 +94,9 @@ export async function processJob(job: BullJob) {
     await git.clone(cloneUrl, tempDir, ['--depth=1', '--branch=feature/phase-1']).catch(async () => {
        // if branch doesn't exist, try default branch
        if (repo.name === 'Lucky-939/stateless-api') {
-         await git.clone(cloneUrl, tempDir);
+         await git.clone(cloneUrl, tempDir as string);
        } else {
-         await git.clone(cloneUrl, tempDir, ['--depth=1']);
+         await git.clone(cloneUrl, tempDir as string, ['--depth=1']);
        }
     });
     

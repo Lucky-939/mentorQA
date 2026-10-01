@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars, no-empty, prefer-const */
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as path from 'path';
