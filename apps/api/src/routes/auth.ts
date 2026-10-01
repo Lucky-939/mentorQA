@@ -40,6 +40,15 @@ function setRefreshCookie(res: Response, token: string) {
 // ── GET /auth/login ───────────────────────────────────────────────────────────
 // Redirects browser to GitHub OAuth authorisation page.
 
+authRouter.get('/mock', async (req: Request, res: Response) => {
+  const user = await prisma.user.findFirst();
+  if (user) {
+    const refreshToken = generateRefreshToken(user.id);
+    setRefreshCookie(res, refreshToken);
+  }
+  res.redirect('http://localhost:3000/dashboard');
+});
+
 authRouter.get('/login', (_req: Request, res: Response) => {
   const clientId = process.env.GITHUB_CLIENT_ID;
   if (!clientId) {

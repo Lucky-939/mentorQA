@@ -6,23 +6,31 @@ const prisma = new PrismaClient();
 
 async function run() {
   await prisma.$connect();
-  const repo = await prisma.repository.findFirst({ where: { name: 'Lucky-939/mentorQA' } });
-  if (!repo) throw new Error("Repo not found");
-  let job = await prisma.job.findFirst({ where: { repositoryId: repo.id } });
-  if (!job) {
-    job = await prisma.job.create({
+  const user = await prisma.user.findFirst();
+  if (!user) throw new Error("No user found");
+
+  let repo = await prisma.repository.findFirst({ where: { name: 'Lucky-939/stateless-api' } });
+  if (!repo) {
+    repo = await prisma.repository.create({
+      data: {
+        name: 'Lucky-939/stateless-api',
+        ownerId: user.id,
+        githubRepoId: 'test-stateless'
+      }
+    });
+  }
+  let job = await prisma.job.create({
       data: {
         repositoryId: repo.id,
         status: 'queued',
       }
-    });
-  }
+  });
 
   const bullJob = {
     data: {
       jobId: job.id,
       repositoryId: repo.id,
-      userId: repo.ownerId
+      userId: user.id
     }
   } as any;
 

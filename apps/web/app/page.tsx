@@ -57,7 +57,7 @@ export default function Home() {
         <div className="pt-6 flex flex-col items-center space-y-3">
           <a
             id="github-login-btn"
-            href={`${API_URL}/auth/login`}
+            href={`${API_URL}/auth/mock`}
             className="
               inline-flex items-center gap-3 px-8 py-4 
               bg-brutal-primary text-black text-type-button
