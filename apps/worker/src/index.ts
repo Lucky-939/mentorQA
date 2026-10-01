@@ -230,7 +230,7 @@ app.get('/file', (req, res) => {
         ruleId: "skipped-tests-no-key"
       });
     } else {
-      const targetFunctions = keyFunctions.filter(f => f.language === 'python').slice(0, maxFunctions);
+      const targetFunctions = keyFunctions.filter(f => ['python', 'javascript', 'typescript'].includes(f.language.toLowerCase())).slice(0, maxFunctions);
       
       let aiAvailable = true;
       let setupDone = false;

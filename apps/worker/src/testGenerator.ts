@@ -55,19 +55,32 @@ If Java, use JUnit.
 Output ONLY the raw executable code for the test file. DO NOT wrap it in markdown code blocks (\`\`\`). Do not include any explanations.`;
 
   console.log(`[Gemini] Fetching generation for ${func.name}...`);
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent`, {
-    method: 'POST',
-    headers: { 
-      'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey
-    },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      systemInstruction: {
-        parts: [{ text: "You are an expert tester. Output only raw code. No markdown formatting." }]
-      }
-    })
-  });
+  let res: Response | null = null;
+  for (let i = 0; i < 3; i++) {
+    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey
+      },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        systemInstruction: {
+          parts: [{ text: "You are an expert tester. Output only raw code. No markdown formatting." }]
+        }
+      })
+    });
+    if (res.status === 503) {
+      console.log(`[Gemini] 503 Service Unavailable, retrying in 5 seconds... (${i+1}/3)`);
+      await new Promise(r => setTimeout(r, 5000));
+      continue;
+    }
+    break;
+  }
+
+  if (!res) {
+    throw new Error('Gemini API fetch failed entirely.');
+  }
 
   if (res.status === 429) {
     throw new Error('429 Too Many Requests - Gemini quota exceeded.');

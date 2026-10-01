@@ -29,14 +29,13 @@ RUN pnpm --filter @mentorqa/api run build
 # Deploy isolated production bundle for the API
 RUN pnpm deploy --filter @mentorqa/api --prod /prod/api
 
-# Re-generate Prisma Client inside the deployed bundle
-RUN cd /prod/api && npx prisma generate --schema=node_modules/@mentorqa/db/prisma/schema.prisma
-
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM node:24-alpine AS runner
 
 WORKDIR /app
 ENV NODE_ENV=production
+
+RUN npm install -g prisma@6.19.3
 
 # Copy the isolated bundle
 COPY --from=builder /prod/api ./
@@ -44,4 +43,4 @@ COPY --from=builder /prod/api ./
 EXPOSE 3001
 
 # Run migrations, then start the server
-CMD ["sh", "-c", "npx prisma migrate deploy --schema=node_modules/@mentorqa/db/prisma/schema.prisma && node dist/index.js"]
+CMD ["sh", "-c", "prisma migrate deploy --schema=node_modules/@mentorqa/db/prisma/schema.prisma && node dist/index.js"]

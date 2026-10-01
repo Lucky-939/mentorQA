@@ -25,20 +25,26 @@ export async function setupSandbox(tempDir: string, stack: { languages: string[]
   if (stack.languages.includes('JavaScript/TypeScript')) {
     // Stage 1: npm install --ignore-scripts
     if (fs.existsSync(path.join(tempDir, 'package.json'))) {
-      await runDocker(`docker run --rm -v "${tempDir}:/app" -w /app --user node node:20-alpine npm install --ignore-scripts`, 90000);
+      await runDocker(`docker run --rm -v "${tempDir}:/app" -w /app --user node node:20-alpine npm install --ignore-scripts`, 300000);
       // Install jest globally in the project so npx jest works
-      await runDocker(`docker run --rm -v "${tempDir}:/app" -w /app --user node node:20-alpine npm install --no-save --ignore-scripts jest @types/jest`, 60000);
+      await runDocker(`docker run --rm -v "${tempDir}:/app" -w /app --user node node:20-alpine npm install --no-save --ignore-scripts jest @types/jest`, 300000);
     }
-  } else if (stack.languages.includes('Python')) {
+  }
+  
+  if (stack.languages.includes('Python')) {
+    // Install to local directory inside the volume so it persists
+    await runDocker(`docker run --rm -v "${tempDir}:/app" -w /app -e HOME=/app/.home --user 1000 python:3.11-slim pip install --user pytest pytest-asyncio`, 300000);
     if (fs.existsSync(path.join(tempDir, 'requirements.txt'))) {
-      // Python pip install --no-deps
-      await runDocker(`docker run --rm -v "${tempDir}:/app" -w /app --user 1000 python:3.11-slim pip install --no-deps --user -r requirements.txt`, 90000);
+      await runDocker(`docker run --rm -v "${tempDir}:/app" -w /app -e HOME=/app/.home --user 1000 python:3.11-slim pip install --user --only-binary=:all: -r requirements.txt`, 300000);
+    } else if (fs.existsSync(path.join(tempDir, 'services/analysis/requirements.txt'))) {
+      await runDocker(`docker run --rm -v "${tempDir}:/app" -w /app -e HOME=/app/.home --user 1000 python:3.11-slim pip install --user --only-binary=:all: -r services/analysis/requirements.txt`, 300000);
     }
-    await runDocker(`docker run --rm -v "${tempDir}:/app" -w /app --user 1000 python:3.11-slim pip install --user pytest`, 60000);
-  } else if (stack.languages.includes('Java')) {
+  }
+  
+  if (stack.languages.includes('Java')) {
     // Java Maven setup
     if (fs.existsSync(path.join(tempDir, 'pom.xml'))) {
-      await runDocker(`docker run --rm -v "${tempDir}:/app" -w /app --user 1000 maven:3.9-amazoncorretto-17 mvn dependency:resolve -q`, 120000);
+      await runDocker(`docker run --rm -v "${tempDir}:/app" -w /app --user 1000 maven:3.9-amazoncorretto-17 mvn dependency:resolve -q`, 300000);
     }
   }
 }
@@ -57,7 +63,7 @@ export async function executeTest(
     cmd = `docker run --rm --network none --memory 256m --cpus 0.5 -v "${tempDir}:/app" -w /app --user node node:20-alpine npx jest ${relativeTestPath}`;
   } else if (func.language === 'python') {
     relativeTestPath = `${testFileName}_test.py`;
-    cmd = `docker run --rm --network none --memory 256m --cpus 0.5 -v "${tempDir}:/app" -w /app --user 1000 python:3.11-slim python -m pytest ${relativeTestPath}`;
+    cmd = `docker run --rm --network none --memory 256m --cpus 0.5 -v "${tempDir}:/app" -w /app -e HOME=/app/.home -e PYTHONPATH=/app/services/analysis --user 1000 python:3.11-slim python -m pytest ${relativeTestPath}`;
   } else if (func.language === 'Java') {
     relativeTestPath = `src/test/java/${testFileName}Test.java`;
     cmd = `docker run --rm --network none --memory 512m --cpus 1.0 -v "${tempDir}:/app" -w /app --user 1000 maven:3.9-amazoncorretto-17 mvn test -Dtest=${testFileName}Test -q`;
