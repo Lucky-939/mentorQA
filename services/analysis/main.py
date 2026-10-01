@@ -1,10 +1,18 @@
-from typing import Any, Dict, List, Optional
+# ruff: noqa: E501
+from typing import Any, Dict, List
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from analyzer.static_analyzer import Finding, KeyFunction, Endpoint, GraphNode, GraphEdge, run_static_analysis
+from analyzer.static_analyzer import (
+    Endpoint,
+    Finding,
+    GraphEdge,
+    GraphNode,
+    KeyFunction,
+    run_static_analysis,
+)
 
 app = FastAPI(
     title="MentorQA Analysis Service",
