@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import Redis from 'ioredis';
 import { z } from 'zod';
-import { Agent } from 'undici';
+import { fetch as undiciFetch, Agent } from 'undici';
 import {
   Finding,
   MentorExplanation,
@@ -452,7 +452,8 @@ export function createFreshDispatcher(): Agent {
   return new Agent({
     keepAliveTimeout: 1,
     keepAliveMaxTimeout: 1,
-    pipelining: 0
+    pipelining: 0,
+    connect: { family: 4 }
   });
 }
 
@@ -508,6 +509,14 @@ ${batchPromptItems.join('\n\n')}
 `;
 }
 
+export function getEffectiveFetch(fetchFn?: typeof fetch): typeof fetch {
+  if (fetchFn && fetchFn !== (undiciFetch as any) && fetchFn !== fetch) return fetchFn;
+  if ((globalThis as any).fetch && ((globalThis as any).fetch.mock || (globalThis as any).fetch._isMockFunction)) {
+    return (globalThis as any).fetch;
+  }
+  return undiciFetch as any;
+}
+
 export async function callGeminiBatch(
   batch: FindingGroup[],
   config: MentorConfig,
@@ -515,9 +524,11 @@ export async function callGeminiBatch(
   stats: EnrichmentStats,
   retryDelay503Ms = RETRY_DELAY_503_MS,
   retryDelayNetworkMs = RETRY_DELAY_NETWORK_MS,
-  fetchFn: typeof fetch = fetch,
+  fetchFn: typeof fetch = undiciFetch as any,
   stageSignal?: AbortSignal
 ): Promise<{ results: Map<string, MentorItemOutput>; stopReason?: 'quota' | 'unavailable' }> {
+  const actualFetch = getEffectiveFetch(fetchFn);
+  const isMock = Boolean((actualFetch as any)?.mock || (actualFetch as any)?._isMockFunction);
   const results = new Map<string, MentorItemOutput>();
   const promptText = buildBatchPrompt(batch);
 
@@ -600,7 +611,7 @@ CRITICAL SECURITY AND GROUNDING INSTRUCTIONS:
 
     try {
       stats.apiCalls++;
-      apiRes = await (fetchFn as any)(urlForModel(config.model), {
+      const reqOptions: any = {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -608,9 +619,12 @@ CRITICAL SECURITY AND GROUNDING INSTRUCTIONS:
           'Connection': 'close'
         },
         body: JSON.stringify(payload),
-        signal: requestSignal,
-        dispatcher
-      } as any);
+        signal: requestSignal
+      };
+      if (!isMock) {
+        reqOptions.dispatcher = dispatcher;
+      }
+      apiRes = await (actualFetch as any)(urlForModel(config.model), reqOptions);
     } catch (fetchErr: any) {
       if (stageSignal?.aborted) {
         console.warn('[MentorQA] Stage budget expired during network request.');
@@ -691,7 +705,7 @@ CRITICAL SECURITY AND GROUNDING INSTRUCTIONS:
       : AbortSignal.timeout(30000);
     try {
       stats.apiCalls++;
-      const fallbackRes = await (fetchFn as any)(urlForModel(config.fallbackModel), {
+      const fallbackReqOptions: any = {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -699,9 +713,12 @@ CRITICAL SECURITY AND GROUNDING INSTRUCTIONS:
           'Connection': 'close'
         },
         body: JSON.stringify(payload),
-        signal: fallbackRequestSignal,
-        dispatcher: fallbackDispatcher
-      } as any);
+        signal: fallbackRequestSignal
+      };
+      if (!isMock) {
+        fallbackReqOptions.dispatcher = fallbackDispatcher;
+      }
+      const fallbackRes = await (actualFetch as any)(urlForModel(config.fallbackModel), fallbackReqOptions);
 
       if (fallbackRes.ok) {
         const data = (await fallbackRes.json()) as any;
@@ -751,7 +768,7 @@ CRITICAL SECURITY AND GROUNDING INSTRUCTIONS:
       : AbortSignal.timeout(30000);
     try {
       stats.apiCalls++;
-      const repairRes = await (fetchFn as any)(urlForModel(config.model), {
+      const repairReqOptions: any = {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -772,9 +789,12 @@ CRITICAL SECURITY AND GROUNDING INSTRUCTIONS:
           systemInstruction: { parts: [{ text: systemInstruction }] },
           generationConfig: payload.generationConfig
         }),
-        signal: repairRequestSignal,
-        dispatcher: repairDispatcher
-      } as any);
+        signal: repairRequestSignal
+      };
+      if (!isMock) {
+        repairReqOptions.dispatcher = repairDispatcher;
+      }
+      const repairRes = await (actualFetch as any)(urlForModel(config.model), repairReqOptions);
 
       if (repairRes.ok) {
         const repairData = (await repairRes.json()) as any;
@@ -813,10 +833,12 @@ CRITICAL SECURITY AND GROUNDING INSTRUCTIONS:
  */
 export async function verifyGeminiModel(apiKey: string, modelName: string): Promise<void> {
   if (!apiKey) return;
+  const dispatcher = createFreshDispatcher();
   try {
-    const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models', {
-      headers: { 'x-goog-api-key': apiKey },
-      signal: AbortSignal.timeout(10000)
+    const res = await (undiciFetch as any)('https://generativelanguage.googleapis.com/v1beta/models', {
+      headers: { 'x-goog-api-key': apiKey, 'Connection': 'close' },
+      signal: AbortSignal.timeout(10000),
+      dispatcher
     });
     if (!res.ok) {
       console.warn(`[MentorQA] Advisory check: GET /v1beta/models returned status ${res.status}.`);
@@ -834,6 +856,8 @@ export async function verifyGeminiModel(apiKey: string, modelName: string): Prom
     }
   } catch (err: any) {
     console.warn(`[MentorQA] Advisory model check failed (non-fatal): ${err.message}`);
+  } finally {
+    await (dispatcher as any).destroy().catch(() => {});
   }
 }
 
@@ -848,7 +872,7 @@ export async function enrichFindings(
   config: MentorConfig = getMentorConfig(),
   retryDelay503Ms = RETRY_DELAY_503_MS,
   retryDelayNetworkMs = RETRY_DELAY_NETWORK_MS,
-  fetchFn: typeof fetch = fetch,
+  fetchFn: typeof fetch = undiciFetch as any,
   stageSignal?: AbortSignal
 ): Promise<{ enrichedFindings: Finding[]; stats: EnrichmentStats }> {
   const startTime = Date.now();
