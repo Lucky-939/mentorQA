@@ -10,7 +10,7 @@ async function main() {
   const user = await prisma.user.findFirst();
   if (!user) throw new Error("No user found in DB");
 
-  const repoFullName = 'Lucky-939/stateless-api';
+  const repoFullName = process.argv[2] || 'Lucky-939/stateless-api';
   
   // Create dummy repository if not exist
   let repository = await prisma.repository.findFirst({ where: { name: repoFullName } });

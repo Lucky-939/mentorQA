@@ -4,6 +4,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import ReviewResults from '@/components/ReviewResults';
+import { Finding } from '@mentorqa/shared-types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
@@ -20,17 +21,6 @@ interface Repo {
   private: boolean;
   defaultBranch: string;
   updatedAt: string;
-}
-
-interface Finding {
-  id: string;
-  category: string;
-  severity: string;
-  file: string;
-  lineStart: number;
-  lineEnd: number;
-  message: string;
-  ruleId: string;
 }
 
 const SPINNER_CHARS = ['|', '/', '-', '\\'];

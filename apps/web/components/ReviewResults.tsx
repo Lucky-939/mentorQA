@@ -3,17 +3,7 @@
 
 import { useState, useMemo } from 'react';
 import DependencyGraph from './DependencyGraph';
-
-interface Finding {
-  id: string;
-  category: string;
-  severity: string;
-  file: string;
-  lineStart: number;
-  lineEnd: number;
-  message: string;
-  ruleId: string;
-}
+import { Finding } from '@mentorqa/shared-types';
 
 interface ReviewResultsProps {
   findings: Finding[];
@@ -32,6 +22,11 @@ const TABS = [
 
 export default function ReviewResults({ findings, graphData }: ReviewResultsProps) {
   const [activeTab, setActiveTab] = useState('OVERVIEW');
+  const [expandedMentorIds, setExpandedMentorIds] = useState<Record<string, boolean>>({});
+
+  const toggleMentor = (id: string) => {
+    setExpandedMentorIds((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
 
   // Categorize findings
   const categorizedFindings = useMemo(() => {
@@ -98,21 +93,134 @@ export default function ReviewResults({ findings, graphData }: ReviewResultsProp
     return sorted.slice(0, 4); // Top 4 highest severity
   }, [findings]);
 
-  const renderFindingCard = (finding: Finding) => (
-    <div key={finding.id} className="p-4 bg-brutal-panel border border-brutal-border flex flex-col md:flex-row md:items-start gap-4 h-full">
-      <div className={`w-1 h-auto self-stretch min-h-[40px] shrink-0 ${finding.severity === 'critical' ? 'bg-red-600' : finding.severity === 'high' ? 'bg-red-500' : finding.severity === 'medium' ? 'bg-orange-500' : finding.severity === 'low' ? 'bg-yellow-500' : 'bg-brutal-border'}`}></div>
-      <div className="flex-1 space-y-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-brutal-primary font-bold text-sm">{finding.ruleId}</span>
-          <span className="text-[10px] uppercase tracking-widest px-2 py-0.5 border border-brutal-border text-brutal-secondary font-mono">{finding.category}</span>
+  const renderFindingCard = (finding: Finding) => {
+    const mentor = finding.metadata?.mentor;
+    const mentorStatus = finding.metadata?.mentorStatus;
+    const isExpanded = !!expandedMentorIds[finding.id];
+
+    let statusNote: string | null = null;
+    if (!mentor) {
+      if (mentorStatus === 'skipped-quota') statusNote = 'AI quota reached';
+      else if (mentorStatus === 'skipped-no-key') statusNote = 'AI not configured';
+      else if (mentorStatus === 'skipped-cap') statusNote = 'Not explained in this run';
+      else if (mentorStatus === 'skipped-unavailable') statusNote = 'AI service unavailable';
+      else if (mentorStatus === 'fallback-invalid-json') statusNote = 'AI response invalid';
+      else if (mentorStatus === 'dry-run') statusNote = 'Dry run mode (AI generation skipped)';
+    }
+
+    return (
+      <div key={finding.id} className="p-4 bg-brutal-panel border border-brutal-border flex flex-col md:flex-row md:items-start gap-4 h-full">
+        <div className={`w-1 h-auto self-stretch min-h-[40px] shrink-0 ${finding.severity === 'critical' ? 'bg-red-600' : finding.severity === 'high' ? 'bg-red-500' : finding.severity === 'medium' ? 'bg-orange-500' : finding.severity === 'low' ? 'bg-yellow-500' : 'bg-brutal-border'}`}></div>
+        <div className="flex-1 space-y-3 w-full">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-brutal-primary font-bold text-sm">{finding.ruleId}</span>
+              <span className="text-[10px] uppercase tracking-widest px-2 py-0.5 border border-brutal-border text-brutal-secondary font-mono">{finding.category}</span>
+            </div>
+            {mentor && (
+              <button
+                type="button"
+                aria-expanded={isExpanded}
+                aria-controls={`mentor-panel-${finding.id}`}
+                onClick={() => toggleMentor(finding.id)}
+                className="px-2.5 py-1 text-[11px] font-mono font-bold uppercase tracking-widest border border-brutal-border bg-black/40 hover:bg-brutal-primary hover:text-black focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-brutal-primary transition-colors text-brutal-primary cursor-pointer"
+              >
+                {isExpanded ? '▼ MENTOR' : '▶ MENTOR'}
+              </button>
+            )}
+          </div>
+
+          <p className="text-sm text-brutal-secondary leading-relaxed">{finding.message}</p>
+
+          <p className="text-xs text-brutal-muted font-mono pt-2 border-t border-brutal-border border-dashed">
+            {finding.file} {finding.lineStart > 0 ? `: L${finding.lineStart}-${finding.lineEnd}` : ''}
+          </p>
+
+          {/* Muted note for skip or fallback */}
+          {statusNote && (
+            <p className="text-xs text-brutal-muted font-mono italic">
+              [Note: {statusNote}]
+            </p>
+          )}
+
+          {/* Expanded Mentor Panel */}
+          {mentor && isExpanded && (
+            <div
+              id={`mentor-panel-${finding.id}`}
+              className="mt-3 pt-3 border-t-2 border-brutal-border space-y-4 bg-black/30 p-3"
+            >
+              <div>
+                <h4 className="text-[11px] font-mono font-bold text-brutal-primary uppercase tracking-widest mb-1">
+                  WHAT&apos;S WRONG
+                </h4>
+                <p className="text-xs text-brutal-secondary leading-relaxed font-sans">
+                  {mentor.explanation}
+                </p>
+              </div>
+
+              <div>
+                <h4 className="text-[11px] font-mono font-bold text-brutal-primary uppercase tracking-widest mb-1">
+                  WHY IT MATTERS
+                </h4>
+                <p className="text-xs text-brutal-secondary leading-relaxed font-sans">
+                  {mentor.whyItMatters}
+                </p>
+              </div>
+
+              <div>
+                <h4 className="text-[11px] font-mono font-bold text-brutal-primary uppercase tracking-widest mb-1">
+                  HOW TO FIX
+                </h4>
+                <ol className="list-decimal list-inside space-y-1 text-xs text-brutal-secondary">
+                  {mentor.howToFix.map((step, idx) => (
+                    <li key={idx} className="leading-relaxed font-sans">{step}</li>
+                  ))}
+                </ol>
+              </div>
+
+              {mentor.beforeCode && mentor.afterCode && (
+                <div>
+                  <h4 className="text-[11px] font-mono font-bold text-brutal-primary uppercase tracking-widest mb-2">
+                    BEFORE / AFTER
+                  </h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="border border-brutal-border bg-black/60 p-2">
+                      <span className="text-[10px] font-mono text-red-400 font-bold uppercase tracking-wider block mb-1">
+                        BEFORE (FLAWED)
+                      </span>
+                      <pre className="text-xs font-mono text-red-300 overflow-x-auto whitespace-pre p-1">
+                        <code>{mentor.beforeCode}</code>
+                      </pre>
+                    </div>
+                    <div className="border border-brutal-border bg-black/60 p-2">
+                      <span className="text-[10px] font-mono text-green-400 font-bold uppercase tracking-wider block mb-1">
+                        AFTER (CORRECTED)
+                      </span>
+                      <pre className="text-xs font-mono text-green-300 overflow-x-auto whitespace-pre p-1">
+                        <code>{mentor.afterCode}</code>
+                      </pre>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {mentor.concept && (
+                <div className="border-t border-brutal-border border-dashed pt-2">
+                  <h4 className="text-[11px] font-mono font-bold text-brutal-primary uppercase tracking-widest mb-1">
+                    CONCEPT TO LEARN
+                  </h4>
+                  <p className="text-xs text-brutal-secondary leading-relaxed">
+                    <span className="font-bold text-brutal-primary">{mentor.concept.name}: </span>
+                    {mentor.concept.summary}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
-        <p className="text-sm text-brutal-secondary leading-relaxed line-clamp-3">{finding.message}</p>
-        <p className="text-xs text-brutal-muted font-mono mt-auto pt-2 border-t border-brutal-border border-dashed">
-          {finding.file} {finding.lineStart > 0 ? `: L${finding.lineStart}-${finding.lineEnd}` : ''}
-        </p>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="w-full">

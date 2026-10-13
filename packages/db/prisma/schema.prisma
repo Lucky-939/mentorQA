@@ -50,11 +50,12 @@ model Job {
 }
 
 model Review {
-  id        String   @id @default(cuid())
-  jobId     String   @unique
-  findings  Json? // Will hold Array of Finding objects
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              String   @id @default(cuid())
+  jobId           String   @unique
+  findings        Json? // Will hold Array of Finding objects
+  enrichmentStats Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
 

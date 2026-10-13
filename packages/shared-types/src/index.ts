@@ -40,6 +40,39 @@ export interface AuthUser {
 export type FindingCategory = 'code-smell' | 'security' | 'complexity' | 'architecture' | 'test-coverage' | 'api' | 'performance';
 export type FindingSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 
+export type MentorStatus =
+  | 'ok'
+  | 'cached'
+  | 'fallback-invalid-json'
+  | 'skipped-quota'
+  | 'skipped-cap'
+  | 'skipped-no-key'
+  | 'skipped-unavailable'
+  | 'not-applicable'
+  | 'dry-run';
+
+export interface MentorConcept {
+  name: string;
+  summary: string;
+}
+
+export interface MentorExplanation {
+  explanation: string;
+  whyItMatters: string;
+  howToFix: string[];
+  beforeCode: string | null;
+  afterCode: string | null;
+  concept: MentorConcept;
+  generatedBy: string;
+  promptVersion: number;
+}
+
+export interface FindingMetadata {
+  mentor?: MentorExplanation;
+  mentorStatus?: MentorStatus;
+  [key: string]: any;
+}
+
 export interface Finding {
   id: string;
   category: FindingCategory;
@@ -49,5 +82,29 @@ export interface Finding {
   lineEnd: number;
   message: string;
   ruleId: string;
-  metadata?: Record<string, any>;
+  metadata?: FindingMetadata;
 }
+
+export interface EnrichmentStats {
+  eligible: number;
+  groups: number;
+  enriched: number;
+  cached: number;
+  apiCalls: number;
+  firstPassValid: number;
+  repaired: number;
+  fallback: number;
+  skippedQuota: number;
+  skippedCap: number;
+  droppedCode: number;
+  ungroundedRefs: number;
+  durationMs: number;
+  model: string;
+  promptVersion: number;
+  tokenUsage?: {
+    promptTokens?: number;
+    candidatesTokens?: number;
+    totalTokens?: number;
+  };
+}
+

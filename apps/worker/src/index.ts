@@ -11,6 +11,8 @@ import { generateTestWithGemini, KeyFunction } from './testGenerator';
 import { setupSandbox, executeTest } from './sandbox';
 import { executeDynamicTests, Endpoint } from './dynamicTester';
 import { storeGraph, detectArchitecturalFlaws } from './neo4j';
+import { enrichFindings, verifyGeminiModel } from './mentor';
+import { Finding } from '@mentorqa/shared-types';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const prisma = new PrismaClient();
@@ -353,11 +355,40 @@ app.get('/file', (req, res) => {
       ...archFindings
     ];
 
+    // Phase 7: AI Mentor Enrichment
+    let enrichmentStats: any = null;
+    try {
+      await prisma.job.update({ where: { id: jobId }, data: { status: 'enriching-findings' } });
+      console.log(`[Job ${jobId}] Status: enriching-findings`);
+
+      const apiKey = process.env.GEMINI_API_KEY;
+      const enrichmentBudgetMs = 90000; // 90s hard overall stage budget
+
+      const enrichmentPromise = enrichFindings(allFindings as unknown as Finding[], tempDir, redis, apiKey);
+      const timeoutPromise = new Promise<{ enrichedFindings: Finding[]; stats: any }>((_, reject) =>
+        setTimeout(() => reject(new Error('Enrichment stage hard time budget exceeded (90s)')), enrichmentBudgetMs)
+      );
+
+      const result = await Promise.race([enrichmentPromise, timeoutPromise]);
+      enrichmentStats = result.stats;
+      console.log(`[Job ${jobId}] Enrichment completed:`, {
+        eligible: enrichmentStats.eligible,
+        enriched: enrichmentStats.enriched,
+        cached: enrichmentStats.cached,
+        apiCalls: enrichmentStats.apiCalls,
+        skippedCap: enrichmentStats.skippedCap,
+        skippedQuota: enrichmentStats.skippedQuota,
+        durationMs: enrichmentStats.durationMs
+      });
+    } catch (enrichErr: any) {
+      console.error(`[Job ${jobId}] Enrichment stage error (proceeding with raw findings):`, enrichErr.message);
+    }
+
     // Save findings to Review model
     await prisma.review.upsert({
       where: { jobId },
-      update: { findings: allFindings },
-      create: { jobId, findings: allFindings }
+      update: { findings: allFindings, enrichmentStats },
+      create: { jobId, findings: allFindings, enrichmentStats }
     });
 
     if (analysisSuccess) {
@@ -389,6 +420,14 @@ async function main() {
   console.log('🔄 MentorQA Worker starting...');
   await prisma.$connect();
   console.log('✅ Database connected');
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  const geminiModel = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+  if (apiKey) {
+    verifyGeminiModel(apiKey, geminiModel).catch((err) =>
+      console.warn('[MentorQA] Advisory model check error:', err.message)
+    );
+  }
 
   const worker = new Worker('review-pipeline', processJob, { connection: redis });
 

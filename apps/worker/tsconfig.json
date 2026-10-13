@@ -11,7 +11,7 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "paths": {
-      "@mentorqa/shared-types": ["../../packages/shared-types/src/index.ts"]
+      "@mentorqa/shared-types": ["../../packages/shared-types/dist/index.d.ts"]
     }
   },
   "include": ["src"],
