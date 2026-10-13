@@ -357,30 +357,46 @@ app.get('/file', (req, res) => {
 
     // Phase 7: AI Mentor Enrichment
     let enrichmentStats: any = null;
+    const stageController = new AbortController();
+    const enrichmentBudgetMs = 90000; // 90s hard overall stage budget
+    const budgetTimer = setTimeout(() => {
+      stageController.abort();
+    }, enrichmentBudgetMs);
+
     try {
       await prisma.job.update({ where: { id: jobId }, data: { status: 'enriching-findings' } });
       console.log(`[Job ${jobId}] Status: enriching-findings`);
 
       const apiKey = process.env.GEMINI_API_KEY;
-      const enrichmentBudgetMs = 90000; // 90s hard overall stage budget
-
-      const enrichmentPromise = enrichFindings(allFindings as unknown as Finding[], tempDir, redis, apiKey);
-      const timeoutPromise = new Promise<{ enrichedFindings: Finding[]; stats: any }>((_, reject) =>
-        setTimeout(() => reject(new Error('Enrichment stage hard time budget exceeded (90s)')), enrichmentBudgetMs)
+      const result = await enrichFindings(
+        allFindings as unknown as Finding[],
+        tempDir,
+        redis,
+        apiKey,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        stageController.signal
       );
+      clearTimeout(budgetTimer);
 
-      const result = await Promise.race([enrichmentPromise, timeoutPromise]);
-      enrichmentStats = result.stats;
-      console.log(`[Job ${jobId}] Enrichment completed:`, {
-        eligible: enrichmentStats.eligible,
-        enriched: enrichmentStats.enriched,
-        cached: enrichmentStats.cached,
-        apiCalls: enrichmentStats.apiCalls,
-        skippedCap: enrichmentStats.skippedCap,
-        skippedQuota: enrichmentStats.skippedQuota,
-        durationMs: enrichmentStats.durationMs
-      });
+      if (!stageController.signal.aborted) {
+        enrichmentStats = result.stats;
+        console.log(`[Job ${jobId}] Enrichment completed:`, {
+          eligible: enrichmentStats.eligible,
+          enriched: enrichmentStats.enriched,
+          cached: enrichmentStats.cached,
+          apiCalls: enrichmentStats.apiCalls,
+          skippedCap: enrichmentStats.skippedCap,
+          skippedQuota: enrichmentStats.skippedQuota,
+          durationMs: enrichmentStats.durationMs
+        });
+      } else {
+        console.warn(`[Job ${jobId}] Enrichment stage budget expired (90s); late results discarded.`);
+      }
     } catch (enrichErr: any) {
+      clearTimeout(budgetTimer);
       console.error(`[Job ${jobId}] Enrichment stage error (proceeding with raw findings):`, enrichErr.message);
     }
 

@@ -791,7 +791,7 @@ import { D } from './d';`;
       };
 
       const { results, stopReason } = await callGeminiBatch(
-        batch, config, 'fake-key', stats, 1, fakeFetch as any
+        batch, config, 'fake-key', stats, 1, 1, fakeFetch as any
       );
 
       expect(callCount).toBe(3);
@@ -839,7 +839,7 @@ import { D } from './d';`;
       };
 
       const { results, stopReason } = await callGeminiBatch(
-        batch, fallbackConfig, 'fake-key', stats, 1, fakeFetch as any
+        batch, fallbackConfig, 'fake-key', stats, 1, 1, fakeFetch as any
       );
 
       expect(callCount).toBe(4); // 3 on primary + 1 on fallback
@@ -882,7 +882,8 @@ import { D } from './d';`;
         fakeRedis,
         'fake-key',
         cbConfig,
-        1, // 1ms delay
+        1, // 1ms delay 503
+        1, // 1ms delay network
         fakeFetch as any
       );
 
@@ -922,12 +923,59 @@ import { D } from './d';`;
         'fake-key',
         dryRunConfig,
         1,
+        1,
         fakeFetch as any
       );
 
       expect(fakeFetch).not.toHaveBeenCalled();
       expect(stats.apiCalls).toBe(0);
       expect(enrichedFindings[0].metadata?.mentorStatus).toBe('dry-run');
+    });
+
+    it('halts immediately and makes no further calls when stage budget abortSignal fires', async () => {
+      let totalFetchCalls = 0;
+      const stageController = new AbortController();
+
+      const fakeFetch = vi.fn().mockImplementation(async () => {
+        totalFetchCalls++;
+        // Simulate budget expiration during first request
+        stageController.abort();
+        return new Response('503 Service Unavailable', { status: 503 });
+      });
+
+      const multiBatchFindings: Finding[] = [
+        { id: 'b1', category: 'security', severity: 'critical', file: 'src/a.ts', lineStart: 1, lineEnd: 2, message: 'm1', ruleId: 'r1' },
+        { id: 'b2', category: 'security', severity: 'high', file: 'src/b.ts', lineStart: 1, lineEnd: 2, message: 'm2', ruleId: 'r2' }
+      ];
+
+      const fakeRedis: any = {
+        get: vi.fn().mockResolvedValue(null),
+        set: vi.fn().mockResolvedValue('OK')
+      };
+
+      const budgetConfig = {
+        model: 'gemini-3.8-flash',
+        maxEnrichPerRun: 12,
+        batchSize: 1,
+        debugPrompts: false,
+        dryRun: false,
+        timeoutMs: 90000
+      };
+
+      await enrichFindings(
+        multiBatchFindings,
+        null,
+        fakeRedis,
+        'fake-key',
+        budgetConfig,
+        1,
+        1,
+        fakeFetch as any,
+        stageController.signal
+      );
+
+      // Once aborted, no subsequent retries or batches are initiated
+      expect(totalFetchCalls).toBe(1);
     });
   });
 });

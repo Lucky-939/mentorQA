@@ -183,20 +183,20 @@ export default function ReviewResults({ findings, graphData }: ReviewResultsProp
                   <h4 className="text-[11px] font-mono font-bold text-brutal-primary uppercase tracking-widest mb-2">
                     BEFORE / AFTER
                   </h4>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="space-y-3">
                     <div className="border border-brutal-border bg-black/60 p-2">
-                      <span className="text-[10px] font-mono text-red-400 font-bold uppercase tracking-wider block mb-1">
-                        BEFORE (FLAWED)
+                      <span className="text-[10px] font-mono text-brutal-muted font-bold uppercase tracking-wider block mb-1">
+                        BEFORE
                       </span>
-                      <pre className="text-xs font-mono text-red-300 overflow-x-auto whitespace-pre p-1">
+                      <pre className="text-xs font-mono text-brutal-secondary overflow-x-auto whitespace-pre p-2">
                         <code>{mentor.beforeCode}</code>
                       </pre>
                     </div>
                     <div className="border border-brutal-border bg-black/60 p-2">
-                      <span className="text-[10px] font-mono text-green-400 font-bold uppercase tracking-wider block mb-1">
-                        AFTER (CORRECTED)
+                      <span className="text-[10px] font-mono text-brutal-muted font-bold uppercase tracking-wider block mb-1">
+                        AFTER
                       </span>
-                      <pre className="text-xs font-mono text-green-300 overflow-x-auto whitespace-pre p-1">
+                      <pre className="text-xs font-mono text-brutal-secondary overflow-x-auto whitespace-pre p-2">
                         <code>{mentor.afterCode}</code>
                       </pre>
                     </div>
