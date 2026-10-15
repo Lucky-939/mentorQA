@@ -36,7 +36,7 @@ export function getMentorConfig(): MentorConfig {
     dryRun: process.env.MENTOR_DRY_RUN === 'true',
     enabled: process.env.MENTOR_ENABLED !== 'false',
     requestTimeoutMs: parseInt(process.env.GEMINI_REQUEST_TIMEOUT_MS || '15000', 10),
-    timeoutMs: 30000 // 30 seconds overall stage budget
+    timeoutMs: parseInt(process.env.GEMINI_STAGE_TIMEOUT_MS || '60000', 10)
   };
 }
 
@@ -336,8 +336,26 @@ export function findRouteHandlerSnippet(lines: string[], message: string): strin
   for (let i = 0; i < lines.length; i++) {
     for (const pat of patterns) {
       if (pat.test(lines[i])) {
-        // Found the route definition line! Extract up to 60 lines from here
-        const handlerLines = lines.slice(Math.max(0, i - 2), Math.min(lines.length, i + 58));
+        // Track opening and closing braces to find the clean boundary of the handler function
+        let openBraces = 0;
+        let foundOpen = false;
+        let endIdx = i;
+        for (let j = i; j < Math.min(lines.length, i + 35); j++) {
+          const line = lines[j];
+          for (const ch of line) {
+            if (ch === '{') {
+              openBraces++;
+              foundOpen = true;
+            } else if (ch === '}') {
+              openBraces--;
+            }
+          }
+          endIdx = j;
+          if (foundOpen && openBraces <= 0) {
+            break;
+          }
+        }
+        const handlerLines = lines.slice(Math.max(0, i - 1), endIdx + 1);
         return handlerLines.join('\n');
       }
     }
@@ -478,7 +496,7 @@ export const RETRY_DELAY_NETWORK_MS = 1000;
 
 export function createFreshDispatcher(): Agent {
   return new Agent({
-    connect: { family: 4 }
+    connect: { autoSelectFamily: false, family: 4 }
   });
 }
 
@@ -583,42 +601,27 @@ CRITICAL SECURITY AND GROUNDING INSTRUCTIONS:
    - beforeCode: If a snippet was provided (enclosed in <<<SNIPPET_START>>> ... <<<SNIPPET_END>>>), extract an exact, verbatim copy from the snippet showing the flawed code. If no snippet was provided, beforeCode MUST be null.
    - afterCode: If beforeCode is non-null, provide the exact replacement code fixing the flaw. If beforeCode is null, afterCode MUST be null.
    - concept: An object { name: string, summary: string } where summary explains the underlying engineering concept in ~30 words.
-5. Output ONLY valid JSON matching the schema. No markdown fences outside the JSON.`;
+5. Output ONLY a valid JSON object matching the schema:
+{
+  "items": [
+    {
+      "id": string,
+      "explanation": string,
+      "whyItMatters": string,
+      "howToFix": string[],
+      "beforeCode": string | null,
+      "afterCode": string | null,
+      "concept": { "name": string, "summary": string }
+    }
+  ]
+}
+No markdown fences outside the JSON.`;
 
   const payload = {
     contents: [{ role: 'user', parts: [{ text: promptText }] }],
     systemInstruction: { parts: [{ text: systemInstruction }] },
     generationConfig: {
       responseMimeType: 'application/json',
-      responseSchema: {
-        type: 'OBJECT',
-        properties: {
-          items: {
-            type: 'ARRAY',
-            items: {
-              type: 'OBJECT',
-              properties: {
-                id: { type: 'STRING' },
-                explanation: { type: 'STRING' },
-                whyItMatters: { type: 'STRING' },
-                howToFix: { type: 'ARRAY', items: { type: 'STRING' } },
-                beforeCode: { type: 'STRING', nullable: true },
-                afterCode: { type: 'STRING', nullable: true },
-                concept: {
-                  type: 'OBJECT',
-                  properties: {
-                    name: { type: 'STRING' },
-                    summary: { type: 'STRING' }
-                  },
-                  required: ['name', 'summary']
-                }
-              },
-              required: ['id', 'explanation', 'whyItMatters', 'howToFix', 'concept']
-            }
-          }
-        },
-        required: ['items']
-      },
       temperature: 0.2
     }
   };

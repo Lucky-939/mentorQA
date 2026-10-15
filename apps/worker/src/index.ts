@@ -86,7 +86,7 @@ export async function processJob(job: BullJob) {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `mentorqa-job-${jobId}-`));
     
     const git = simpleGit();
-    let cloneUrl = `https://x-access-token:${token}@github.com/${repo.name}.git`;
+    let cloneUrl = token ? `https://x-access-token:${token}@github.com/${repo.name}.git` : `https://github.com/${repo.name}.git`;
     
     // Testing intercept for Phase 4 (strictly gated behind DEMO_MODE=true, default false)
     if (process.env.DEMO_MODE === 'true' && repo.name === 'Lucky-939/stateless-api') {
@@ -348,7 +348,7 @@ app.get('/file', (req, res) => {
     }
     
     // Save findings
-    const allFindings = [
+    let allFindings: any[] = [
       ...staticFindings,
       ...testFindings,
       ...dynamicFindings,
@@ -381,8 +381,9 @@ app.get('/file', (req, res) => {
       );
       clearTimeout(budgetTimer);
 
+      allFindings = result.enrichedFindings;
+      enrichmentStats = result.stats;
       if (!stageController.signal.aborted) {
-        enrichmentStats = result.stats;
         console.log(`[Job ${jobId}] Enrichment completed:`, {
           eligible: enrichmentStats.eligible,
           enriched: enrichmentStats.enriched,
@@ -393,7 +394,7 @@ app.get('/file', (req, res) => {
           durationMs: enrichmentStats.durationMs
         });
       } else {
-        console.warn(`[Job ${jobId}] Enrichment stage budget expired (90s); late results discarded.`);
+        console.warn(`[Job ${jobId}] Enrichment stage budget expired (90s); saving completed findings.`);
       }
     } catch (enrichErr: any) {
       clearTimeout(budgetTimer);
