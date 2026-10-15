@@ -61,6 +61,7 @@ export function stripDelimitersUntilStable(input: string): string {
 export function sanitizePromptField(input: string): string {
   if (!input) return '';
   let str = stripDelimitersUntilStable(input);
+  // eslint-disable-next-line no-control-regex
   str = str.replace(/[\r\n\x00-\x1F\x7F-\x9F]/g, ' ').replace(/\s+/g, ' ').trim();
   return str;
 }
