@@ -102,8 +102,9 @@ def analyze_python_file(filepath: str, repo_path: str) -> tuple[List[Finding], L
                 if child.type == "dotted_name" or child.type == "identifier":
                     target = child.text.decode("utf-8")
                     edges.append(GraphEdge(source=file_id, target=target, relationship="imports"))
-                    # best effort: create a node for the imported module if it doesn't exist yet
-                    # we just let Neo4j MERGE it later
+                    is_rel = target.startswith(".")
+                    nodes.append(GraphNode(id=target, name=target, type="file" if is_rel else "package", file=target, layer=classify_layer(target, target)))
+
         
         if node.type in ["if_statement", "for_statement", "while_statement"]:
             findings.append(
@@ -225,13 +226,17 @@ def analyze_js_ts_file(
         if node.type == "import_statement":
             source_node = node.child_by_field_name("source")
             if source_node:
-                target = source_node.text.decode("utf-8").strip("'\"`")
+                raw_target = source_node.text.decode("utf-8").strip("'\"`")
                 # resolve relative paths slightly to make it match other files
-                if target.startswith("./") or target.startswith("../"):
-                    target_path = os.path.normpath(os.path.join(os.path.dirname(file_id), target)).replace("\\", "/")
-                    target = target_path
+                is_relative = raw_target.startswith("./") or raw_target.startswith("../")
+                if is_relative:
+                    target = os.path.normpath(os.path.join(os.path.dirname(file_id), raw_target)).replace("\\", "/")
+                    node_type = "file"
+                else:
+                    target = raw_target
+                    node_type = "package"
                 edges.append(GraphEdge(source=file_id, target=target, relationship="imports"))
-                nodes.append(GraphNode(id=target, name=os.path.basename(target), type="file", file=target, layer=classify_layer(target, os.path.basename(target))))
+                nodes.append(GraphNode(id=target, name=os.path.basename(target), type=node_type, file=target, layer=classify_layer(target, os.path.basename(target))))
 
         if node.type == "variable_declarator":
             value_node = node.child_by_field_name("value")
@@ -242,12 +247,16 @@ def analyze_js_ts_file(
                     if args_node and len(args_node.children) > 1:
                         first_arg = args_node.children[1]
                         if first_arg.type == "string":
-                            target = first_arg.text.decode("utf-8").strip("'\"`")
-                            if target.startswith("./") or target.startswith("../"):
-                                target_path = os.path.normpath(os.path.join(os.path.dirname(file_id), target)).replace("\\", "/")
-                                target = target_path
+                            raw_target = first_arg.text.decode("utf-8").strip("'\"`")
+                            is_relative = raw_target.startswith("./") or raw_target.startswith("../")
+                            if is_relative:
+                                target = os.path.normpath(os.path.join(os.path.dirname(file_id), raw_target)).replace("\\", "/")
+                                node_type = "file"
+                            else:
+                                target = raw_target
+                                node_type = "package"
                             edges.append(GraphEdge(source=file_id, target=target, relationship="imports"))
-                            nodes.append(GraphNode(id=target, name=os.path.basename(target), type="file", file=target, layer=classify_layer(target, os.path.basename(target))))
+                            nodes.append(GraphNode(id=target, name=os.path.basename(target), type=node_type, file=target, layer=classify_layer(target, os.path.basename(target))))
 
         if node.type == "class_declaration":
             name_node = node.child_by_field_name("name")

@@ -88,88 +88,13 @@ export async function processJob(job: BullJob) {
     const git = simpleGit();
     let cloneUrl = token ? `https://x-access-token:${token}@github.com/${repo.name}.git` : `https://github.com/${repo.name}.git`;
     
-    // Testing intercept for Phase 4 (strictly gated behind DEMO_MODE=true, default false)
-    if (process.env.DEMO_MODE === 'true' && repo.name === 'Lucky-939/stateless-api') {
-      cloneUrl = 'c:/Users/Lucky Bhoir/stateless-api';
-    }
-
     await git.clone(cloneUrl, tempDir, ['--depth=1', '--branch=feature/phase-1']).catch(async () => {
-       // if branch doesn't exist, try default branch
-       if (process.env.DEMO_MODE === 'true' && repo.name === 'Lucky-939/stateless-api') {
-         await git.clone(cloneUrl, tempDir as string);
-       } else {
-         await git.clone(cloneUrl, tempDir as string, ['--depth=1']);
-       }
+      // if branch doesn't exist, try default branch
+      await git.clone(cloneUrl, tempDir as string, ['--depth=1']);
     });
     
     await prisma.job.update({ where: { id: jobId }, data: { status: 'cloned' } });
     console.log(`[Job ${jobId}] Status: cloned`);
-
-    // Inject vulnerabilities for Phase 5 verification (strictly gated behind DEMO_MODE=true, default false)
-    if (process.env.DEMO_MODE === 'true' && repo.name === 'Lucky-939/stateless-api') {
-      fs.writeFileSync(path.join(tempDir, '.env'), 'AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n');
-      
-      fs.appendFileSync(path.join(tempDir, 'index.js'), `
-class DummyDB {
-    all(query, callback) {
-        if (query.includes("'")) {
-             callback(new Error("SQLITE_ERROR: near \\"'\\": syntax error (SQL syntax)"));
-        } else {
-             callback(null, []);
-        }
-    }
-}
-const db = new DummyDB();
-
-app.get('/search', (req, res) => {
-    res.set('Content-Type', 'text/html');
-    res.send("<div>" + req.query.q + "</div>");
-});
-app.get('/admin', (req, res) => {
-    res.json({ secret: 'data' });
-});
-app.get('/users', (req, res) => {
-    const q = req.query.id;
-    // Genuine SQL Injection vulnerability simulation
-    db.all("SELECT * FROM users WHERE id = '" + q + "'", (err, rows) => {
-        if (err) {
-            res.status(500).send(err.toString());
-        } else {
-            res.json(rows);
-        }
-    });
-});
-app.get('/file', (req, res) => {
-    const p = require('path');
-    // Genuine Path Traversal vulnerability
-    res.sendFile(p.resolve(__dirname, req.query.file));
-});
-`);
-    }
-    
-    // Inject Phase 6 Architecture Violations (strictly gated behind DEMO_MODE=true, default false)
-    if (process.env.DEMO_MODE === 'true' && repo.name === 'Lucky-939/stateless-api') {
-      // 1. Layering Violation (Controller directly imports Repository)
-      fs.mkdirSync(path.join(tempDir, 'controllers'), { recursive: true });
-      fs.mkdirSync(path.join(tempDir, 'repositories'), { recursive: true });
-      fs.writeFileSync(path.join(tempDir, 'repositories', 'UserRepository.js'), `
-        module.exports = class UserRepository { get() {} };
-      `);
-      fs.writeFileSync(path.join(tempDir, 'controllers', 'UserController.js'), `
-        const UserRepository = require('../repositories/UserRepository');
-        module.exports = class UserController {
-          constructor() { this.repo = new UserRepository(); }
-        }
-      `);
-
-      // 2. Circular Dependency
-      fs.writeFileSync(path.join(tempDir, 'A.js'), `
-        const B = require('./B.js');
-      `);
-      fs.writeFileSync(path.join(tempDir, 'B.js'), `
-        const A = require('./A.js');
-      `);
-    }
 
     const stack = await detectStack(tempDir);
 

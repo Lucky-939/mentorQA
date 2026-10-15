@@ -28,13 +28,23 @@ export async function storeGraph(repositoryId: string, nodes: any[], edges: any[
 
     // Insert Nodes
     for (const node of nodes) {
+      let nodeType = node.type || 'file';
+      const fileStr = String(node.file || '');
+      if (
+        nodeType === 'package' ||
+        fileStr.startsWith('@') ||
+        (!fileStr.includes('.') && !fileStr.includes('/') && !fileStr.includes('\\') && nodeType !== 'class')
+      ) {
+        nodeType = 'package';
+      }
+
       await session.run(`
         MERGE (n:Node {
           id: $id,
           repositoryId: $repositoryId
         })
         SET n.name = $name, n.type = $type, n.file = $file, n.layer = $layer
-      `, { ...node, repositoryId });
+      `, { ...node, type: nodeType, repositoryId });
     }
 
     // Insert Edges
@@ -90,9 +100,12 @@ export async function detectArchitecturalFlaws(repositoryId: string) {
       });
     }
 
-    // 2. God Classes
+    // 2. God Classes (Only evaluate repository source files, excluding packages and non-relative imports)
     const statsRes = await session.run(`
       MATCH (n:Node {repositoryId: $repositoryId})
+      WHERE (n.file =~ '.*\\.(ts|tsx|js|jsx|py|java|mjs|cjs)$' OR n.type = 'class')
+        AND NOT n.file STARTS WITH '@'
+        AND n.type <> 'package'
       OPTIONAL MATCH (n)-[r]-()
       WITH n, count(r) AS degree
       WITH avg(degree) AS avgDegree, stDev(degree) AS stdDevDegree
@@ -106,6 +119,9 @@ export async function detectArchitecturalFlaws(repositoryId: string) {
       
       const godClassesRes = await session.run(`
         MATCH (n:Node {repositoryId: $repositoryId})
+        WHERE (n.file =~ '.*\\.(ts|tsx|js|jsx|py|java|mjs|cjs)$' OR n.type = 'class')
+          AND NOT n.file STARTS WITH '@'
+          AND n.type <> 'package'
         OPTIONAL MATCH (n)-[r]-()
         WITH n, count(r) AS degree
         WHERE degree > $threshold AND degree > 5

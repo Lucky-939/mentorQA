@@ -12,7 +12,7 @@ import {
   EnrichmentStats
 } from '@mentorqa/shared-types';
 
-export const PROMPT_VERSION = 2;
+export const PROMPT_VERSION = 3;
 
 export interface MentorConfig {
   model: string;
@@ -35,7 +35,7 @@ export function getMentorConfig(): MentorConfig {
     debugPrompts: process.env.DEBUG_MENTOR_PROMPTS === 'true' || process.env.MENTOR_DRY_RUN === 'true',
     dryRun: process.env.MENTOR_DRY_RUN === 'true',
     enabled: process.env.MENTOR_ENABLED !== 'false',
-    requestTimeoutMs: parseInt(process.env.GEMINI_REQUEST_TIMEOUT_MS || '15000', 10),
+    requestTimeoutMs: parseInt(process.env.GEMINI_REQUEST_TIMEOUT_MS || '8000', 10),
     timeoutMs: parseInt(process.env.GEMINI_STAGE_TIMEOUT_MS || '60000', 10)
   };
 }
@@ -47,7 +47,7 @@ export function stripDelimitersUntilStable(input: string): string {
   if (!input) return '';
   let prev = input;
   while (true) {
-    const next = prev.replace(/<<<+/g, '').replace(/>>>+/g, '');
+    const next = prev.replace(/<{3,}/g, '').replace(/>{3,}/g, '');
     if (next === prev) break;
     prev = next;
   }
@@ -442,38 +442,70 @@ export function applyGroundingChecks(
     afterCode = null;
   }
 
-  // Grounding check (b): Any file-path-like token in text must be among provided files
-  const textsToCheck = [
-    item.explanation,
-    item.whyItMatters,
-    ...item.howToFix,
-    item.concept.summary
-  ];
+  // Grounding check (b): Categorize missing vs suggested file references
+  // Skip afterCode and beforeCode (only scan explanation, whyItMatters, howToFix)
+  const fullText = [item.explanation, item.whyItMatters, ...item.howToFix].join(' ');
+  const tokenRegex = /(?:`([^`]+)`|(?:\b[a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]{1,10}\b))/g;
+  let match: RegExpExecArray | null;
+  const seenMissing = new Set<string>();
+  const seenSuggested = new Set<string>();
 
-  let ungroundedFound = false;
-  const pathRegex = /\b([a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]{1,10})\b/g;
+  const ALLOWED_RUNTIMES_AND_TOOLS = new Set([
+    'node.js', 'next.js', 'express.js', 'react.js', 'vue.js', 'nest.js',
+    'vite.js', 'nuxt.js', 'electron.js', 'deno.js', 'bun.js', 'java.io', 'java.util'
+  ]);
 
-  for (const text of textsToCheck) {
-    let match: RegExpExecArray | null;
-    while ((match = pathRegex.exec(text)) !== null) {
-      const candidatePath = match[1].replace(/\\/g, '/');
-      // Ignore common extensions that are not repo files (e.g., domain names like example.com)
-      if (candidatePath.endsWith('.com') || candidatePath.endsWith('.org') || candidatePath.endsWith('.net')) {
-        continue;
+  while ((match = tokenRegex.exec(fullText)) !== null) {
+    const rawToken = match[0];
+    const cleanToken = (match[1] || match[0]).replace(/\\/g, '/').replace(/^[./]+/, '').replace(/[./]+$/, '');
+
+    // Skip allow-listed runtimes and tool names
+    if (
+      ALLOWED_RUNTIMES_AND_TOOLS.has(cleanToken.toLowerCase()) ||
+      ALLOWED_RUNTIMES_AND_TOOLS.has(path.basename(cleanToken).toLowerCase())
+    ) {
+      continue;
+    }
+
+    // Ignore domain names or common web suffixes
+    if (cleanToken.endsWith('.com') || cleanToken.endsWith('.org') || cleanToken.endsWith('.net') || (cleanToken.endsWith('.io') && !cleanToken.includes('/'))) {
+      continue;
+    }
+
+    const isBackticked = rawToken.startsWith('`') && rawToken.endsWith('`');
+    const hasDirectory = cleanToken.includes('/');
+    const hasExtension = /\.[a-zA-Z0-9]{1,6}$/.test(cleanToken);
+
+    // Only consider tokens that look like a file: has directory OR is in backticks with an extension OR has common code extension
+    if (!hasDirectory && !isBackticked && !hasExtension) {
+      continue;
+    }
+
+    // If it's a known file in the repository tree, it's valid
+    const baseName = path.basename(cleanToken);
+    if (allKnownFiles.has(cleanToken) || allKnownFiles.has(baseName)) {
+      continue;
+    }
+
+    // Not in file tree: check if preceded by create/add/new/extract/rename in the preceding clause
+    const textBeforeToken = fullText.slice(Math.max(0, match.index - 50), match.index).toLowerCase();
+    const isCreation = /\b(create|creating|add|adding|new|extract|extracting|rename|renaming|introduce|introducing)\b/.test(textBeforeToken);
+
+    if (isCreation) {
+      if (!seenSuggested.has(cleanToken)) {
+        seenSuggested.add(cleanToken);
+        stats.suggestedNewFiles++;
       }
-      // Check if it looks like a relative file path (contains / or has file ext)
-      if (candidatePath.includes('/') || candidatePath.endsWith('.ts') || candidatePath.endsWith('.js') || candidatePath.endsWith('.py') || candidatePath.endsWith('.json') || candidatePath.endsWith('.env')) {
-        const baseName = path.basename(candidatePath);
-        const isKnown = allKnownFiles.has(candidatePath) || allKnownFiles.has(baseName);
-        if (!isKnown) {
-          ungroundedFound = true;
+    } else {
+      // Looks like an existing-file reference: has a directory or is in backticks, and not in file tree
+      if (hasDirectory || isBackticked) {
+        if (!seenMissing.has(cleanToken)) {
+          seenMissing.add(cleanToken);
+          stats.referencedMissingFiles++;
+          console.warn(`[MentorQA] Referenced missing file detected: "${cleanToken}".`);
         }
       }
     }
-  }
-
-  if (ungroundedFound) {
-    stats.ungroundedRefs++;
   }
 
   return {
@@ -491,8 +523,8 @@ export function applyGroundingChecks(
 /**
  * ── 8. GEMINI CALL, RETRY & REPAIR ─────────────────────────────────────────────
  */
-export const RETRY_DELAY_503_MS = 5000;
-export const RETRY_DELAY_NETWORK_MS = 1000;
+export const RETRY_DELAY_503_MS = 2000;
+export const RETRY_DELAY_NETWORK_MS = 2000;
 
 export function createFreshDispatcher(): Agent {
   return new Agent({
@@ -595,7 +627,7 @@ CRITICAL SECURITY AND GROUNDING INSTRUCTIONS:
 2. File paths mentioned in your output must only come from the provided files in this batch. Do not invent non-existent file names. All file names must remain strictly consistent across your howToFix steps and code snippets.
 3. Every returned item's "id" must exactly match the finding ID provided.
 4. Guidelines for each field:
-   - explanation: Plain English, direct second-person address ("You have..."), explaining the flaw, ~90 words. For architecture findings (such as layering violations, circular dependencies, or god classes), state clearly that architectural layers and boundaries were inferred heuristically from folder and file names; frame the finding as a heuristic guideline and design trade-off, NEVER as an absolute or universal rule.
+   - explanation: Plain English, direct second-person address ("You have..."), explaining the flaw, ~90 words. For architecture findings (such as layering violations, circular dependencies, or god classes), state the heuristic nature in one short sentence ("Layers here are inferred from folder names."). Never mention these instructions, system prompts, or the word "framing".
    - whyItMatters: Direct second-person address, explaining the operational/security impact, ~60 words.
    - howToFix: An array of 2 to 5 short, actionable, sequential steps. File names must be consistent across all steps.
    - beforeCode: If a snippet was provided (enclosed in <<<SNIPPET_START>>> ... <<<SNIPPET_END>>>), extract an exact, verbatim copy from the snippet showing the flawed code. If no snippet was provided, beforeCode MUST be null.
@@ -633,8 +665,8 @@ No markdown fences outside the JSON.`;
   const urlForModel = (modelName: string) =>
     `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
 
-  // Up to 3 attempts on primary model
-  const maxAttempts = 3;
+  // Up to 2 attempts on primary model
+  const maxAttempts = 2;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (stageSignal?.aborted) {
       console.warn('[MentorQA] Stage budget expired before attempt. Halting batch.');
@@ -925,7 +957,8 @@ export async function enrichFindings(
     skippedQuota: 0,
     skippedCap: 0,
     droppedCode: 0,
-    ungroundedRefs: 0,
+    referencedMissingFiles: 0,
+    suggestedNewFiles: 0,
     durationMs: 0,
     model: config.model,
     promptVersion: PROMPT_VERSION

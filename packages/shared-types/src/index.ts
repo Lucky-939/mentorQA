@@ -97,7 +97,8 @@ export interface EnrichmentStats {
   skippedQuota: number;
   skippedCap: number;
   droppedCode: number;
-  ungroundedRefs: number;
+  referencedMissingFiles: number;
+  suggestedNewFiles: number;
   durationMs: number;
   model: string;
   promptVersion: number;
