@@ -42,6 +42,17 @@ export default function DashboardPage() {
   const [graphData, setGraphData] = useState<{ nodes: any[], edges: any[] } | null>(null);
   const [spinnerFrame, setSpinnerFrame] = useState(0);
 
+  // Read ?jobId= from URL to allow direct review viewing
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const qJobId = params.get('jobId');
+      if (qJobId) {
+        setActiveJobId(qJobId);
+      }
+    }
+  }, []);
+
   // ASCII spinner tick
   useEffect(() => {
     const t = setInterval(() => setSpinnerFrame(f => (f + 1) % 4), 200);

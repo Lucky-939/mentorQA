@@ -40,7 +40,7 @@ jobs:
         run: pnpm turbo build
 
       - name: Run tests
-        run: pnpm turbo test
+        run: pnpm turbo test --force
 
       - name: Setup Java
         uses: actions/setup-java@v4

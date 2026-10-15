@@ -88,14 +88,14 @@ export async function processJob(job: BullJob) {
     const git = simpleGit();
     let cloneUrl = `https://x-access-token:${token}@github.com/${repo.name}.git`;
     
-    // Testing intercept for Phase 4
-    if (repo.name === 'Lucky-939/stateless-api') {
+    // Testing intercept for Phase 4 (strictly gated behind DEMO_MODE=true, default false)
+    if (process.env.DEMO_MODE === 'true' && repo.name === 'Lucky-939/stateless-api') {
       cloneUrl = 'c:/Users/Lucky Bhoir/stateless-api';
     }
 
     await git.clone(cloneUrl, tempDir, ['--depth=1', '--branch=feature/phase-1']).catch(async () => {
        // if branch doesn't exist, try default branch
-       if (repo.name === 'Lucky-939/stateless-api') {
+       if (process.env.DEMO_MODE === 'true' && repo.name === 'Lucky-939/stateless-api') {
          await git.clone(cloneUrl, tempDir as string);
        } else {
          await git.clone(cloneUrl, tempDir as string, ['--depth=1']);
@@ -105,8 +105,8 @@ export async function processJob(job: BullJob) {
     await prisma.job.update({ where: { id: jobId }, data: { status: 'cloned' } });
     console.log(`[Job ${jobId}] Status: cloned`);
 
-    // Inject vulnerabilities for Phase 5 verification
-    if (repo.name === 'Lucky-939/stateless-api') {
+    // Inject vulnerabilities for Phase 5 verification (strictly gated behind DEMO_MODE=true, default false)
+    if (process.env.DEMO_MODE === 'true' && repo.name === 'Lucky-939/stateless-api') {
       fs.writeFileSync(path.join(tempDir, '.env'), 'AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\n');
       
       fs.appendFileSync(path.join(tempDir, 'index.js'), `
@@ -147,8 +147,8 @@ app.get('/file', (req, res) => {
 `);
     }
     
-    // Inject Phase 6 Architecture Violations
-    if (repo.name === 'Lucky-939/stateless-api') {
+    // Inject Phase 6 Architecture Violations (strictly gated behind DEMO_MODE=true, default false)
+    if (process.env.DEMO_MODE === 'true' && repo.name === 'Lucky-939/stateless-api') {
       // 1. Layering Violation (Controller directly imports Repository)
       fs.mkdirSync(path.join(tempDir, 'controllers'), { recursive: true });
       fs.mkdirSync(path.join(tempDir, 'repositories'), { recursive: true });
@@ -434,11 +434,13 @@ app.get('/file', (req, res) => {
 
 async function main() {
   console.log('🔄 MentorQA Worker starting...');
+  const undiciPkg = require('undici/package.json');
+  console.log(`[MentorQA Startup] Imported undici version: ${undiciPkg.version}, process.versions.undici: ${(process.versions as any).undici || 'none (Node runtime)'}`);
   await prisma.$connect();
   console.log('✅ Database connected');
 
   const apiKey = process.env.GEMINI_API_KEY;
-  const geminiModel = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+  const geminiModel = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
   if (apiKey) {
     verifyGeminiModel(apiKey, geminiModel).catch((err) =>
       console.warn('[MentorQA] Advisory model check error:', err.message)

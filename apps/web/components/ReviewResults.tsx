@@ -147,7 +147,7 @@ export default function ReviewResults({ findings, graphData }: ReviewResultsProp
           {mentor && isExpanded && (
             <div
               id={`mentor-panel-${finding.id}`}
-              className="mt-3 pt-3 border-t-2 border-brutal-border space-y-4 bg-black/30 p-3"
+              className="mt-3 pt-3 border-t-2 border-brutal-border space-y-4 bg-brutal-panel p-3"
             >
               <div>
                 <h4 className="text-[11px] font-mono font-bold text-brutal-primary uppercase tracking-widest mb-1">
@@ -184,7 +184,7 @@ export default function ReviewResults({ findings, graphData }: ReviewResultsProp
                     BEFORE / AFTER
                   </h4>
                   <div className="space-y-3">
-                    <div className="border border-brutal-border bg-black/60 p-2">
+                    <div className="border border-brutal-border bg-brutal-bg p-2">
                       <span className="text-[10px] font-mono text-brutal-muted font-bold uppercase tracking-wider block mb-1">
                         BEFORE
                       </span>
@@ -192,7 +192,7 @@ export default function ReviewResults({ findings, graphData }: ReviewResultsProp
                         <code>{mentor.beforeCode}</code>
                       </pre>
                     </div>
-                    <div className="border border-brutal-border bg-black/60 p-2">
+                    <div className="border border-brutal-border bg-brutal-bg p-2">
                       <span className="text-[10px] font-mono text-brutal-muted font-bold uppercase tracking-wider block mb-1">
                         AFTER
                       </span>

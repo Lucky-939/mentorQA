@@ -21,19 +21,48 @@ export interface MentorConfig {
   batchSize: number;
   debugPrompts: boolean;
   dryRun: boolean;
+  enabled?: boolean;
+  requestTimeoutMs?: number;
   timeoutMs: number;
 }
 
 export function getMentorConfig(): MentorConfig {
   return {
-    model: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
+    model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite',
     fallbackModel: process.env.GEMINI_FALLBACK_MODEL || undefined,
     maxEnrichPerRun: parseInt(process.env.GEMINI_MAX_ENRICH_PER_RUN || '12', 10),
     batchSize: parseInt(process.env.GEMINI_ENRICH_BATCH_SIZE || '4', 10),
     debugPrompts: process.env.DEBUG_MENTOR_PROMPTS === 'true' || process.env.MENTOR_DRY_RUN === 'true',
     dryRun: process.env.MENTOR_DRY_RUN === 'true',
-    timeoutMs: 90000 // 90 seconds overall stage budget
+    enabled: process.env.MENTOR_ENABLED !== 'false',
+    requestTimeoutMs: parseInt(process.env.GEMINI_REQUEST_TIMEOUT_MS || '15000', 10),
+    timeoutMs: 30000 // 30 seconds overall stage budget
   };
+}
+
+/**
+ * Strips all <<< and >>> sequences in a loop until stable to prevent nested breakout payloads.
+ */
+export function stripDelimitersUntilStable(input: string): string {
+  if (!input) return '';
+  let prev = input;
+  while (true) {
+    const next = prev.replace(/<<<+/g, '').replace(/>>>+/g, '');
+    if (next === prev) break;
+    prev = next;
+  }
+  return prev;
+}
+
+/**
+ * Treats untrusted prompt fields (paths, rules, messages) by stripping delimiters,
+ * newlines, and control characters to prevent prompt injection.
+ */
+export function sanitizePromptField(input: string): string {
+  if (!input) return '';
+  let str = stripDelimitersUntilStable(input);
+  str = str.replace(/[\r\n\x00-\x1F\x7F-\x9F]/g, ' ').replace(/\s+/g, ' ').trim();
+  return str;
 }
 
 /**
@@ -45,11 +74,7 @@ export function getMentorConfig(): MentorConfig {
 export function redactSecrets(snippet: string, isEnvFile = false): string {
   if (!snippet) return '';
 
-  let text = snippet;
-
-  // Delimiter stripping to prevent delimiter breakout
-  text = text.replace(/<<<CODE_SNIPPET_START>>>/g, '');
-  text = text.replace(/<<<CODE_SNIPPET_END>>>/g, '');
+  let text = stripDelimitersUntilStable(snippet);
 
   if (isEnvFile) {
     // For .env files, only retain variable names and mask all values completely
@@ -331,13 +356,14 @@ export function computeCacheKey(
   category: string,
   ruleId: string,
   message: string,
-  snippet: string | null
+  snippet: string | null,
+  model = 'gemini-3.1-flash-lite'
 ): string {
   const normMsg = message.trim().toLowerCase().replace(/\s+/g, ' ');
   const normSnippet = snippet ? snippet.trim().replace(/\s+/g, ' ') : '';
   const raw = `${category}|${ruleId}|${normMsg}|${normSnippet}`;
   const hash = crypto.createHash('sha256').update(raw).digest('hex');
-  return `mentorqa:mentor:v${PROMPT_VERSION}:${hash}`;
+  return `mentorqa:mentor:v${PROMPT_VERSION}:${model}:${hash}`;
 }
 
 /**
@@ -369,7 +395,8 @@ export function applyGroundingChecks(
   item: MentorItemOutput,
   group: FindingGroup,
   allKnownFiles: Set<string>,
-  stats: EnrichmentStats
+  stats: EnrichmentStats,
+  modelUsed = 'gemini-3.1-flash-lite'
 ): MentorExplanation {
   // Grounding check (a): beforeCode must be a whitespace-normalized substring of the snippet
   let beforeCode = item.beforeCode;
@@ -437,7 +464,7 @@ export function applyGroundingChecks(
     beforeCode,
     afterCode,
     concept: item.concept,
-    generatedBy: 'gemini',
+    generatedBy: modelUsed,
     promptVersion: PROMPT_VERSION
   };
 }
@@ -450,18 +477,16 @@ export const RETRY_DELAY_NETWORK_MS = 1000;
 
 export function createFreshDispatcher(): Agent {
   return new Agent({
-    keepAliveTimeout: 1,
-    keepAliveMaxTimeout: 1,
-    pipelining: 0,
     connect: { family: 4 }
   });
 }
 
 export function isTransientNetworkError(err: any): boolean {
   if (!err) return false;
-  const msg = (err.message || '').toLowerCase();
-  const code = (err.code || err.cause?.code || '').toUpperCase();
-  const name = err.name || '';
+  const msg = String(err.message || '').toLowerCase();
+  const rawCode = err.code ?? err.cause?.code ?? '';
+  const code = String(rawCode).toUpperCase();
+  const name = String(err.name || '');
   return (
     name === 'TimeoutError' ||
     msg.includes('timeout') ||
@@ -472,7 +497,9 @@ export function isTransientNetworkError(err: any): boolean {
     msg.includes('und_err_') ||
     msg.includes('connection was forcibly closed') ||
     msg.includes('failed to respond') ||
-    msg.includes('fetch failed')
+    msg.includes('fetch failed') ||
+    msg.includes('wsarecv') ||
+    msg.includes('socket')
   );
 }
 
@@ -480,22 +507,25 @@ export function buildBatchPrompt(batch: FindingGroup[]): string {
   const batchPromptItems = batch.map((g, idx) => {
     let snippetBlock = '[No code snippet available]';
     if (g.snippet) {
-      // Delimiter stripping to prevent delimiter breakout
-      const sanitizedSnippet = g.snippet
-        .replace(/<<<SNIPPET_START>>>/g, '')
-        .replace(/<<<SNIPPET_END>>>/g, '')
-        .replace(/<<<CODE_SNIPPET_START>>>/g, '')
-        .replace(/<<<CODE_SNIPPET_END>>>/g, '');
+      const sanitizedSnippet = stripDelimitersUntilStable(g.snippet);
       snippetBlock = `<<<SNIPPET_START>>>\n${sanitizedSnippet}\n<<<SNIPPET_END>>>`;
     }
+    const safeId = sanitizePromptField(g.id);
+    const safeCat = sanitizePromptField(g.category);
+    const safeRule = sanitizePromptField(g.ruleId);
+    const safeSev = sanitizePromptField(g.highestSeverity);
+    const safeFile = sanitizePromptField(g.file);
+    const safeLocs = g.locations.map(sanitizePromptField).join(', ');
+    const safeMsg = sanitizePromptField(g.findings[0]?.message || '');
+
     return `### Finding Item ${idx + 1}
-- ID: ${g.id}
-- Category: ${g.category}
-- Rule: ${g.ruleId}
-- Severity: ${g.highestSeverity}
-- File: ${g.file}
-- Locations: ${g.locations.join(', ')}
-- Finding Message: ${g.findings[0]?.message || ''}
+- ID: ${safeId}
+- Category: ${safeCat}
+- Rule: ${safeRule}
+- Severity: ${safeSev}
+- File: ${safeFile}
+- Locations: ${safeLocs}
+- Finding Message: ${safeMsg}
 - Snippet:
 ${snippetBlock}
 `;
@@ -526,11 +556,13 @@ export async function callGeminiBatch(
   retryDelayNetworkMs = RETRY_DELAY_NETWORK_MS,
   fetchFn: typeof fetch = undiciFetch as any,
   stageSignal?: AbortSignal
-): Promise<{ results: Map<string, MentorItemOutput>; stopReason?: 'quota' | 'unavailable' }> {
+): Promise<{ results: Map<string, MentorItemOutput>; modelUsed?: string; stopReason?: 'quota' | 'unavailable' }> {
   const actualFetch = getEffectiveFetch(fetchFn);
   const isMock = Boolean((actualFetch as any)?.mock || (actualFetch as any)?._isMockFunction);
   const results = new Map<string, MentorItemOutput>();
   const promptText = buildBatchPrompt(batch);
+  let modelUsed: string | undefined = undefined;
+  const perReqTimeout = config.requestTimeoutMs || 15000;
 
   if (config.debugPrompts) {
     console.log(`[DEBUG_MENTOR_PROMPTS] Outgoing Batch Prompt:\n${promptText}`);
@@ -598,7 +630,8 @@ CRITICAL SECURITY AND GROUNDING INSTRUCTIONS:
     `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
 
   // Up to 3 attempts on primary model
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (stageSignal?.aborted) {
       console.warn('[MentorQA] Stage budget expired before attempt. Halting batch.');
       return { results, stopReason: 'unavailable' };
@@ -606,8 +639,8 @@ CRITICAL SECURITY AND GROUNDING INSTRUCTIONS:
 
     const dispatcher = createFreshDispatcher();
     const requestSignal = stageSignal
-      ? (AbortSignal as any).any([stageSignal, AbortSignal.timeout(30000)])
-      : AbortSignal.timeout(30000);
+      ? (AbortSignal as any).any([stageSignal, AbortSignal.timeout(perReqTimeout)])
+      : AbortSignal.timeout(perReqTimeout);
 
     try {
       stats.apiCalls++;
@@ -615,8 +648,7 @@ CRITICAL SECURITY AND GROUNDING INSTRUCTIONS:
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-goog-api-key': apiKey,
-          'Connection': 'close'
+          'x-goog-api-key': apiKey
         },
         body: JSON.stringify(payload),
         signal: requestSignal
@@ -625,74 +657,74 @@ CRITICAL SECURITY AND GROUNDING INSTRUCTIONS:
         reqOptions.dispatcher = dispatcher;
       }
       apiRes = await (actualFetch as any)(urlForModel(config.model), reqOptions);
+      if (!apiRes) {
+        return { results, stopReason: 'unavailable' };
+      }
+
+      if (apiRes.status === 503) {
+        console.warn(`[MentorQA] Gemini API returned 503 Service Unavailable (attempt ${attempt}/${maxAttempts}).`);
+        if (attempt < maxAttempts) {
+          await (dispatcher as any).destroy().catch(() => {});
+          await new Promise((r) => setTimeout(r, retryDelay503Ms));
+          continue;
+        }
+        primaryExhaustedTransient = true;
+        break; // No sleep after final failed attempt
+      }
+
+      if (apiRes.status === 429) {
+        console.warn(`[MentorQA] Gemini API returned 429 Too Many Requests (Quota Exceeded). Stopping further calls.`);
+        return { results, stopReason: 'quota' };
+      }
+
+      if (apiRes.status === 403 || apiRes.status === 404) {
+        console.error(`[MentorQA] Gemini API returned ${apiRes.status}. Check API key and model availability.`);
+        return { results, stopReason: 'unavailable' };
+      }
+
+      if (!apiRes.ok) {
+        console.error(`[MentorQA] Gemini API returned unexpected status ${apiRes.status}`);
+        return { results, stopReason: 'unavailable' };
+      }
+
+      // Success response on primary model
+      try {
+        const data = (await apiRes.json()) as any;
+        if (data.usageMetadata) {
+          stats.tokenUsage = {
+            promptTokens: (stats.tokenUsage?.promptTokens || 0) + (data.usageMetadata.promptTokenCount || 0),
+            candidatesTokens: (stats.tokenUsage?.candidatesTokens || 0) + (data.usageMetadata.candidatesTokenCount || 0),
+            totalTokens: (stats.tokenUsage?.totalTokens || 0) + (data.usageMetadata.totalTokenCount || 0)
+          };
+        }
+        responseText = data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
+        modelUsed = config.model;
+      } catch (e: any) {
+        console.error('[MentorQA] Failed to read Gemini response json:', e.message);
+      }
+      break;
     } catch (fetchErr: any) {
       if (stageSignal?.aborted) {
         console.warn('[MentorQA] Stage budget expired during network request.');
         return { results, stopReason: 'unavailable' };
       }
       const isTransient = isTransientNetworkError(fetchErr);
-      if (attempt < 3 && isTransient) {
-        console.warn(`[MentorQA] Network error on attempt ${attempt}/3 (${fetchErr.message}). Retrying with fresh connection in ${retryDelayNetworkMs}ms...`);
+      if (attempt < maxAttempts && isTransient) {
+        console.warn(`[MentorQA] Network error on attempt ${attempt}/${maxAttempts} (${fetchErr.message}). Retrying with fresh connection in ${retryDelayNetworkMs}ms...`);
         await new Promise((r) => setTimeout(r, retryDelayNetworkMs));
         continue;
       }
-      if (attempt === 3 && isTransient) {
+      if (attempt === maxAttempts && isTransient) {
         primaryExhaustedTransient = true;
-        break;
+        break; // No sleep after final failed attempt
       }
       return { results, stopReason: 'unavailable' };
     } finally {
       await (dispatcher as any).destroy().catch(() => {});
     }
-
-    if (!apiRes) {
-      if (primaryExhaustedTransient) break;
-      return { results, stopReason: 'unavailable' };
-    }
-
-    if (apiRes.status === 503) {
-      console.warn(`[MentorQA] Gemini API returned 503 Service Unavailable (attempt ${attempt}/3). Retrying with fresh connection in ${retryDelay503Ms}ms...`);
-      if (attempt < 3) {
-        await new Promise((r) => setTimeout(r, retryDelay503Ms));
-        continue;
-      }
-      primaryExhaustedTransient = true;
-      break;
-    }
-
-    if (apiRes.status === 429) {
-      console.warn(`[MentorQA] Gemini API returned 429 Too Many Requests (Quota Exceeded). Stopping further calls.`);
-      return { results, stopReason: 'quota' };
-    }
-
-    if (apiRes.status === 403 || apiRes.status === 404) {
-      console.error(`[MentorQA] Gemini API returned ${apiRes.status}. Check API key and model availability.`);
-      return { results, stopReason: 'unavailable' };
-    }
-
-    if (!apiRes.ok) {
-      console.error(`[MentorQA] Gemini API returned unexpected status ${apiRes.status}`);
-      return { results, stopReason: 'unavailable' };
-    }
-
-    // Success response on primary model
-    try {
-      const data = (await apiRes.json()) as any;
-      if (data.usageMetadata) {
-        stats.tokenUsage = {
-          promptTokens: (stats.tokenUsage?.promptTokens || 0) + (data.usageMetadata.promptTokenCount || 0),
-          candidatesTokens: (stats.tokenUsage?.candidatesTokens || 0) + (data.usageMetadata.candidatesTokenCount || 0),
-          totalTokens: (stats.tokenUsage?.totalTokens || 0) + (data.usageMetadata.totalTokenCount || 0)
-        };
-      }
-      responseText = data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
-    } catch (e: any) {
-      console.error('[MentorQA] Failed to read Gemini response json:', e.message);
-    }
-    break;
   }
 
-  // Fallback model attempt if primary exhausted after 3 attempts on 503/network
+  // Fallback model attempt if primary exhausted after transient errors
   if (primaryExhaustedTransient && config.fallbackModel && config.fallbackModel !== config.model) {
     if (stageSignal?.aborted) {
       console.warn('[MentorQA] Stage budget expired before fallback attempt.');
@@ -701,16 +733,15 @@ CRITICAL SECURITY AND GROUNDING INSTRUCTIONS:
     console.warn(`[MentorQA] Primary model ${config.model} exhausted attempts on 503/network error. Trying fallback model ${config.fallbackModel} once...`);
     const fallbackDispatcher = createFreshDispatcher();
     const fallbackRequestSignal = stageSignal
-      ? (AbortSignal as any).any([stageSignal, AbortSignal.timeout(30000)])
-      : AbortSignal.timeout(30000);
+      ? (AbortSignal as any).any([stageSignal, AbortSignal.timeout(perReqTimeout)])
+      : AbortSignal.timeout(perReqTimeout);
     try {
       stats.apiCalls++;
       const fallbackReqOptions: any = {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-goog-api-key': apiKey,
-          'Connection': 'close'
+          'x-goog-api-key': apiKey
         },
         body: JSON.stringify(payload),
         signal: fallbackRequestSignal
@@ -730,6 +761,7 @@ CRITICAL SECURITY AND GROUNDING INSTRUCTIONS:
           };
         }
         responseText = data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
+        modelUsed = config.fallbackModel;
       } else {
         console.warn(`[MentorQA] Fallback model ${config.fallbackModel} returned status ${fallbackRes.status}`);
         return { results, stopReason: 'unavailable' };
@@ -746,7 +778,7 @@ CRITICAL SECURITY AND GROUNDING INSTRUCTIONS:
 
   if (!responseText) {
     stats.fallback += batch.length;
-    return { results };
+    return { results, modelUsed };
   }
 
   // Parse and validate with Zod
@@ -759,21 +791,20 @@ CRITICAL SECURITY AND GROUNDING INSTRUCTIONS:
     console.warn(`[MentorQA] Batch validation failed: ${parseErr.message}. Attempting repair retry...`);
     if (stageSignal?.aborted) {
       console.warn('[MentorQA] Stage budget expired before repair attempt.');
-      return { results };
+      return { results, modelUsed };
     }
     // Repair retry
     const repairDispatcher = createFreshDispatcher();
     const repairRequestSignal = stageSignal
-      ? (AbortSignal as any).any([stageSignal, AbortSignal.timeout(30000)])
-      : AbortSignal.timeout(30000);
+      ? (AbortSignal as any).any([stageSignal, AbortSignal.timeout(perReqTimeout)])
+      : AbortSignal.timeout(perReqTimeout);
     try {
       stats.apiCalls++;
       const repairReqOptions: any = {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-goog-api-key': apiKey,
-          'Connection': 'close'
+          'x-goog-api-key': apiKey
         },
         body: JSON.stringify({
           contents: [
@@ -803,6 +834,7 @@ CRITICAL SECURITY AND GROUNDING INSTRUCTIONS:
           const rawRepaired = JSON.parse(repairText);
           parsedBatch = MentorBatchResponseSchema.parse(rawRepaired);
           stats.repaired += batch.length;
+          modelUsed = config.model;
         }
       }
     } catch (repairErr: any) {
@@ -814,7 +846,7 @@ CRITICAL SECURITY AND GROUNDING INSTRUCTIONS:
 
   if (!parsedBatch) {
     stats.fallback += batch.length;
-    return { results };
+    return { results, modelUsed };
   }
 
   // Populate results
@@ -825,7 +857,7 @@ CRITICAL SECURITY AND GROUNDING INSTRUCTIONS:
     }
   }
 
-  return { results };
+  return { results, modelUsed };
 }
 
 /**
@@ -836,7 +868,7 @@ export async function verifyGeminiModel(apiKey: string, modelName: string): Prom
   const dispatcher = createFreshDispatcher();
   try {
     const res = await (undiciFetch as any)('https://generativelanguage.googleapis.com/v1beta/models', {
-      headers: { 'x-goog-api-key': apiKey, 'Connection': 'close' },
+      headers: { 'x-goog-api-key': apiKey },
       signal: AbortSignal.timeout(10000),
       dispatcher
     });
@@ -895,6 +927,19 @@ export async function enrichFindings(
     promptVersion: PROMPT_VERSION
   };
 
+  // Step 0: Check if MENTOR_ENABLED is false
+  if (config.enabled === false) {
+    console.log('[MentorQA] MENTOR_ENABLED=false: Skipping AI mentor enrichment stage entirely.');
+    for (const f of findings) {
+      f.metadata = {
+        ...f.metadata,
+        mentorStatus: 'not-applicable'
+      };
+    }
+    stats.durationMs = Date.now() - startTime;
+    return { enrichedFindings: findings, stats };
+  }
+
   const allKnownFiles = new Set<string>();
   findings.forEach((f) => {
     if (f.file) {
@@ -931,7 +976,8 @@ export async function enrichFindings(
       group.category,
       group.ruleId,
       group.findings[0]?.message || '',
-      group.snippet
+      group.snippet,
+      config.model
     );
 
     let cachedVal: string | null = null;
@@ -945,6 +991,9 @@ export async function enrichFindings(
       try {
         const cachedExplanation = JSON.parse(cachedVal) as MentorExplanation;
         stats.cached += group.findings.length;
+        if (cachedExplanation.generatedBy) {
+          stats.model = cachedExplanation.generatedBy;
+        }
         for (const f of group.findings) {
           f.metadata = {
             ...f.metadata,
@@ -1027,7 +1076,7 @@ export async function enrichFindings(
       continue;
     }
 
-    const { results, stopReason } = await callGeminiBatch(
+    const { results, modelUsed, stopReason } = await callGeminiBatch(
       batch,
       config,
       apiKey,
@@ -1051,21 +1100,22 @@ export async function enrichFindings(
 
     if (stopReason === 'unavailable') {
       consecutiveNetworkFailures++;
-      console.warn(`[MentorQA] Batch failed due to network/service failure (${consecutiveNetworkFailures}/2).`);
+      console.warn(`[MentorQA] Batch failed due to network/service failure (${consecutiveNetworkFailures}/1).`);
       for (const group of batch) {
         for (const f of group.findings) {
           f.metadata = { ...f.metadata, mentorStatus: 'skipped-unavailable' };
         }
       }
-      if (consecutiveNetworkFailures >= 2) {
-        console.warn(`[MentorQA] Circuit breaker tripped after 2 consecutive network failures. Halting Gemini calls for this run.`);
-        serviceUnavailable = true;
-      }
+      console.warn(`[MentorQA] Circuit breaker tripped after 1 failed batch. Halting Gemini calls for this run.`);
+      serviceUnavailable = true;
       continue;
     }
 
     // Reset consecutive network failure counter on success
     consecutiveNetworkFailures = 0;
+    if (modelUsed) {
+      stats.model = modelUsed;
+    }
 
     // Attach results to groups
     for (const group of batch) {
@@ -1079,14 +1129,21 @@ export async function enrichFindings(
       }
 
       // Apply programmatic grounding checks
-      const explanation = applyGroundingChecks(itemOutput, group, allKnownFiles, stats);
+      const explanation = applyGroundingChecks(
+        itemOutput,
+        group,
+        allKnownFiles,
+        stats,
+        modelUsed || config.model
+      );
 
       // Cache explanation in Redis (TTL 30 days)
       const cacheKey = computeCacheKey(
         group.category,
         group.ruleId,
         group.findings[0]?.message || '',
-        group.snippet
+        group.snippet,
+        config.model
       );
       try {
         await redis.set(cacheKey, JSON.stringify(explanation), 'EX', 30 * 24 * 60 * 60);

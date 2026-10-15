@@ -19,7 +19,7 @@
     "ioredis": "^5.4.2",
     "neo4j-driver": "^6.2.0",
     "simple-git": "^3.27.0",
-    "undici": "^8.11.2",
+    "undici": "8.11.2",
     "zod": "^4.6.6"
   },
   "devDependencies": {
