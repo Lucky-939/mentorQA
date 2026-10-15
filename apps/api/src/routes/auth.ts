@@ -40,7 +40,7 @@ function setRefreshCookie(res: Response, token: string) {
 // ── GET /auth/login ───────────────────────────────────────────────────────────
 // Redirects browser to GitHub OAuth authorisation page.
 
-authRouter.get('/login', (_req: Request, res: Response) => {
+authRouter.get(['/login', '/github'], (_req: Request, res: Response) => {
   const clientId = process.env.GITHUB_CLIENT_ID;
   if (!clientId) {
     res.status(500).json({ error: 'GitHub OAuth not configured' });
