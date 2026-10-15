@@ -86,7 +86,7 @@ export async function processJob(job: BullJob) {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `mentorqa-job-${jobId}-`));
     
     const git = simpleGit();
-    let cloneUrl = token ? `https://x-access-token:${token}@github.com/${repo.name}.git` : `https://github.com/${repo.name}.git`;
+    const cloneUrl = token ? `https://x-access-token:${token}@github.com/${repo.name}.git` : `https://github.com/${repo.name}.git`;
     
     await git.clone(cloneUrl, tempDir, ['--depth=1', '--branch=feature/phase-1']).catch(async () => {
       // if branch doesn't exist, try default branch
