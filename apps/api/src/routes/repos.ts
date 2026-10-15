@@ -41,17 +41,21 @@ reposRouter.get('/', requireAuth, async (req: AuthRequest, res: Response) => {
         updatedAt: repo.updated_at,
       }));
     } catch (octokitError) {
-      console.warn('GitHub API failed (likely mock token). Falling back to mock repo.', (octokitError as Error).message);
-      repos = [
-        {
-          id: 9999999,
-          name: 'stateless-api',
-          fullName: 'Lucky-939/stateless-api',
-          private: false,
-          defaultBranch: 'main',
-          updatedAt: new Date().toISOString(),
-        }
-      ];
+      if (process.env.ENABLE_MOCK_AUTH === 'true') {
+        console.warn('GitHub API failed. ENABLE_MOCK_AUTH is true, falling back to mock repo.', (octokitError as Error).message);
+        repos = [
+          {
+            id: 9999999,
+            name: 'stateless-api',
+            fullName: 'Lucky-939/stateless-api',
+            private: false,
+            defaultBranch: 'main',
+            updatedAt: new Date().toISOString(),
+          }
+        ];
+      } else {
+        throw octokitError;
+      }
     }
 
     res.json({ data: repos });
@@ -88,12 +92,25 @@ reposRouter.post('/select', requireAuth, async (req: AuthRequest, res: Response)
       const repoResponse = await octokit.rest.repos.get({ owner, repo });
       githubRepo = repoResponse.data;
     } catch (e) {
-      console.warn('GitHub get repo failed. Using mock repo data.', (e as Error).message);
-      githubRepo = {
-        id: 9999999,
-        full_name: repoFullName,
-        default_branch: 'main'
-      } as any;
+      // If token failed, try unauthenticated fetch for public repositories
+      try {
+        const publicOctokit = new Octokit();
+        const pubResponse = await publicOctokit.rest.repos.get({ owner, repo });
+        githubRepo = pubResponse.data;
+      } catch (pubErr) {
+        if (process.env.ENABLE_MOCK_AUTH === 'true') {
+          console.warn('GitHub get repo failed. ENABLE_MOCK_AUTH is true, using mock repo data.', (e as Error).message);
+          githubRepo = {
+            id: 9999999,
+            full_name: repoFullName,
+            default_branch: 'main'
+          } as any;
+        } else {
+          console.error('Failed to get repo from GitHub:', (pubErr as Error).message);
+          res.status(404).json({ error: `Repository not found on GitHub: ${repoFullName}` });
+          return;
+        }
+      }
     }
 
     // Upsert repository in DB

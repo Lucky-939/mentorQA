@@ -41,6 +41,10 @@ function setRefreshCookie(res: Response, token: string) {
 // Redirects browser to GitHub OAuth authorisation page.
 
 authRouter.get('/mock', async (req: Request, res: Response) => {
+  if (process.env.ENABLE_MOCK_AUTH !== 'true') {
+    res.status(403).json({ error: 'Mock authentication is disabled' });
+    return;
+  }
   const user = await prisma.user.findFirst();
   if (user) {
     const refreshToken = generateRefreshToken(user.id);

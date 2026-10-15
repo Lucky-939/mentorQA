@@ -257,6 +257,108 @@ function scanForSecrets(tempDir: string): Prisma.InputJsonValue[] {
   return findings;
 }
 
+export interface ApiTestCase {
+  name: string;
+  payload?: any;
+  isBodyTest: boolean;
+}
+
+export function getApiTestCases(method: string): ApiTestCase[] {
+  const m = method.toUpperCase();
+  // Body tests are ONLY valid for methods accepting a request body
+  if (['POST', 'PUT', 'PATCH'].includes(m)) {
+    return [
+      { name: 'Missing Required Fields / Empty Body', payload: {}, isBodyTest: true },
+      { name: 'Invalid Data Types', payload: { "id": "not_an_int", "name": 123 }, isBodyTest: true },
+    ];
+  }
+  // GET and HEAD do not accept a request body; skip body fuzzing
+  if (m === 'GET' || m === 'HEAD') {
+    return [
+      { name: 'Standard Request', isBodyTest: false }
+    ];
+  }
+  return [];
+}
+
+export function evaluateApiTestResult(
+  method: string,
+  path: string,
+  file: string,
+  testCase: ApiTestCase,
+  statusCode: number
+): { id: string; category: string; severity: 'info' | 'medium' | 'high'; file: string; lineStart: number; lineEnd: number; ruleId: string; message: string } {
+  const id = crypto.randomUUID();
+  const m = method.toUpperCase();
+
+  if (testCase.isBodyTest) {
+    // 5xx on malformed input is a server error / unhandled crash, NOT a pass
+    if (statusCode >= 500 && statusCode < 600) {
+      return {
+        id,
+        category: "api",
+        severity: "medium",
+        file,
+        lineStart: 0,
+        lineEnd: 0,
+        ruleId: "server-error-on-malformed-input",
+        message: `${m} ${path} returned server error on malformed input (${statusCode}) for test case: '${testCase.name}'. Expected 4xx client error.`
+      };
+    }
+
+    // 4xx is the correct expected validation rejection for invalid or empty bodies
+    if (statusCode >= 400 && statusCode < 500) {
+      return {
+        id,
+        category: "api",
+        severity: "info",
+        file,
+        lineStart: 0,
+        lineEnd: 0,
+        ruleId: "api-test-passed",
+        message: `${m} ${path} correctly returned ${statusCode} for test case: '${testCase.name}'.`
+      };
+    }
+
+    // 2xx or 3xx means the server accepted malformed/missing fields without validation
+    return {
+      id,
+      category: "api",
+      severity: "medium",
+      file,
+      lineStart: 0,
+      lineEnd: 0,
+      ruleId: "api-test-failed",
+      message: `${m} ${path} returned ${statusCode} for test case: '${testCase.name}', expected 4xx client error.`
+    };
+  }
+
+  // Non-body endpoints (e.g. GET/HEAD)
+  if (statusCode >= 200 && statusCode < 400) {
+    return {
+      id,
+      category: "api",
+      severity: "info",
+      file,
+      lineStart: 0,
+      lineEnd: 0,
+      ruleId: "api-test-passed",
+      message: `${m} ${path} correctly returned ${statusCode} for test case: '${testCase.name}'.`
+    };
+  }
+
+  return {
+    id,
+    category: "api",
+    severity: "medium",
+    file,
+    lineStart: 0,
+    lineEnd: 0,
+    ruleId: "api-test-failed",
+    message: `${m} ${path} returned ${statusCode} for test case: '${testCase.name}'.`
+  };
+}
+
 async function runApiTests(tempDir: string, endpoints: Endpoint[], networkName: string, portUsed: number, jobId: string): Promise<Prisma.InputJsonValue[]> {
   const findings: Prisma.InputJsonValue[] = [];
   let endpointsToTest = endpoints;
@@ -268,12 +370,10 @@ async function runApiTests(tempDir: string, endpoints: Endpoint[], networkName: 
 
   for (const ep of endpointsToTest) {
      if (ep.method === 'LISTEN') continue;
-     const cases = [
-       { name: 'Missing Required Fields / Empty Body', payload: {}, expectedStatusRegex: /^(4..|5..)$/ },
-       { name: 'Invalid Data Types', payload: { "id": "not_an_int", "name": 123 }, expectedStatusRegex: /^(4..|5..)$/ },
-     ];
+     const cases = getApiTestCases(ep.method);
 
      for (const tc of cases) {
+       const hasBody = tc.isBodyTest && tc.payload !== undefined;
        let testScript = `
 const http = require('http');
 const req = http.request({
@@ -282,7 +382,7 @@ const req = http.request({
   path: '${ep.path}',
   method: '${ep.method}',
   headers: {
-    'Content-Type': 'application/json'
+    ${hasBody ? "'Content-Type': 'application/json'" : ''}
   }
 }, (res) => {
   console.log(res.statusCode);
@@ -291,39 +391,19 @@ req.on('error', (e) => {
   console.error(e);
   process.exit(1);
 });
-${ep.method !== 'GET' && ep.method !== 'HEAD' ? `req.write(JSON.stringify(${JSON.stringify(tc.payload)}));` : ''}
+${hasBody ? `req.write(JSON.stringify(${JSON.stringify(tc.payload)}));` : ''}
 req.end();
 `;
-       const testScriptPath = path.join(tempDir, `test_api_${ep.id}.js`);
+       const testScriptPath = path.join(tempDir, `test_api_${ep.id}_${tc.name.replace(/[^a-zA-Z0-9]/g, '_')}.js`);
        fs.writeFileSync(testScriptPath, testScript);
 
        try {
-         const { stdout } = await runDocker(`docker run --rm --network ${networkName} -v "${tempDir}:/app" -w /app node:20-alpine node test_api_${ep.id}.js`, 15000);
+         const scriptFileName = path.basename(testScriptPath);
+         const { stdout } = await runDocker(`docker run --rm --network ${networkName} -v "${tempDir}:/app" -w /app node:20-alpine node ${scriptFileName}`, 15000);
          const statusCode = parseInt(stdout.trim(), 10);
          
-         if (!tc.expectedStatusRegex.test(statusCode.toString())) {
-           findings.push({
-             id: crypto.randomUUID(),
-             category: "api",
-             severity: "medium",
-             file: ep.file,
-             lineStart: 0,
-             lineEnd: 0,
-             message: `${ep.method} ${ep.path} returned ${statusCode} for test case: '${tc.name}', expected ${tc.expectedStatusRegex}.`,
-             ruleId: "api-test-failed"
-           });
-         } else {
-           findings.push({
-             id: crypto.randomUUID(),
-             category: "api",
-             severity: "info",
-             file: ep.file,
-             lineStart: 0,
-             lineEnd: 0,
-             message: `${ep.method} ${ep.path} correctly returned ${statusCode} for test case: '${tc.name}'.`,
-             ruleId: "api-test-passed"
-           });
-         }
+         const finding = evaluateApiTestResult(ep.method, ep.path, ep.file, tc, statusCode);
+         findings.push(finding);
        } catch (e) {
           findings.push({
              id: crypto.randomUUID(),

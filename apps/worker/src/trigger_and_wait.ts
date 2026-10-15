@@ -92,8 +92,8 @@ async function trigger(repoFullName: string, githubRepoId: string) {
       break;
     }
 
-    if (elapsed > 400) {
-      console.error('[Trigger] Timed out waiting for job after 400s');
+    if (elapsed > 700) {
+      console.error('[Trigger] Timed out waiting for job after 700s');
       break;
     }
   }

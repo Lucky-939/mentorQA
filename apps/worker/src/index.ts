@@ -386,7 +386,7 @@ app.get('/file', (req, res) => {
       if (!stageController.signal.aborted) {
         console.log(`[Job ${jobId}] Enrichment completed:`, {
           eligible: enrichmentStats.eligible,
-          enriched: enrichmentStats.enriched,
+          findingsEnriched: enrichmentStats.findingsEnriched,
           cached: enrichmentStats.cached,
           apiCalls: enrichmentStats.apiCalls,
           skippedCap: enrichmentStats.skippedCap,

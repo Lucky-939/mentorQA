@@ -88,11 +88,11 @@ export interface Finding {
 export interface EnrichmentStats {
   eligible: number;
   groups: number;
-  enriched: number;
+  findingsEnriched: number;
   cached: number;
   apiCalls: number;
-  firstPassValid: number;
-  repaired: number;
+  groupsFirstPassValid: number;
+  groupsRepaired: number;
   fallback: number;
   skippedQuota: number;
   skippedCap: number;

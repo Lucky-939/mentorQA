@@ -109,7 +109,7 @@ export async function detectArchitecturalFlaws(repositoryId: string) {
         OPTIONAL MATCH (n)-[r]-()
         WITH n, count(r) AS degree
         WHERE degree > $threshold AND degree > 5
-        RETURN n.properties.name AS name, n.properties.file AS file, degree
+        RETURN n.name AS name, n.file AS file, degree
       `, { repositoryId, threshold });
 
       for (const record of godClassesRes.records) {
@@ -117,7 +117,7 @@ export async function detectArchitecturalFlaws(repositoryId: string) {
           id: crypto.randomUUID(),
           category: "architecture",
           severity: "medium",
-          file: record.get('file'),
+          file: record.get('file') || record.get('name') || 'Project',
           lineStart: 0,
           lineEnd: 0,
           message: `God class detected: ${record.get('name')} has unusually high coupling (degree ${record.get('degree')} vs repo average ${avg.toFixed(1)}).`,
