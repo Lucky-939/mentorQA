@@ -20,31 +20,36 @@ async function runDocker(cmd: string, timeoutMs: number): Promise<{ stdout: stri
 }
 
 export async function setupSandbox(tempDir: string, stack: { languages: string[] }): Promise<void> {
-  console.log('[Sandbox] Running setup stage (network allowed)...');
+  console.log(`[${new Date().toISOString()}] [generating-tests:image-pull] Verifying container image for languages: ${stack.languages.join(', ')}...`);
   
   if (stack.languages.includes('JavaScript/TypeScript')) {
     // Stage 1: npm install --ignore-scripts
     if (fs.existsSync(path.join(tempDir, 'package.json'))) {
+      console.log(`[${new Date().toISOString()}] [generating-tests:dependency-install] Starting npm install --ignore-scripts in node:20-alpine...`);
       await runDocker(`docker run --rm -v "${tempDir}:/app" -w /app --user node node:20-alpine npm install --ignore-scripts`, 300000);
-      // Install jest globally in the project so npx jest works
+      console.log(`[${new Date().toISOString()}] [generating-tests:dependency-install] Installing jest in container...`);
       await runDocker(`docker run --rm -v "${tempDir}:/app" -w /app --user node node:20-alpine npm install --no-save --ignore-scripts jest @types/jest`, 300000);
+      console.log(`[${new Date().toISOString()}] [generating-tests:dependency-install] JavaScript/TypeScript dependency install complete.`);
     }
   }
   
   if (stack.languages.includes('Python')) {
-    // Install to local directory inside the volume so it persists
+    console.log(`[${new Date().toISOString()}] [generating-tests:dependency-install] Starting pip install for Python...`);
     await runDocker(`docker run --rm -v "${tempDir}:/app" -w /app -e HOME=/app/.home --user 1000 python:3.11-slim pip install --user pytest pytest-asyncio`, 300000);
     if (fs.existsSync(path.join(tempDir, 'requirements.txt'))) {
       await runDocker(`docker run --rm -v "${tempDir}:/app" -w /app -e HOME=/app/.home --user 1000 python:3.11-slim pip install --user --only-binary=:all: -r requirements.txt`, 300000);
     } else if (fs.existsSync(path.join(tempDir, 'services/analysis/requirements.txt'))) {
       await runDocker(`docker run --rm -v "${tempDir}:/app" -w /app -e HOME=/app/.home --user 1000 python:3.11-slim pip install --user --only-binary=:all: -r services/analysis/requirements.txt`, 300000);
     }
+    console.log(`[${new Date().toISOString()}] [generating-tests:dependency-install] Python dependency install complete.`);
   }
   
   if (stack.languages.includes('Java')) {
     // Java Maven setup
     if (fs.existsSync(path.join(tempDir, 'pom.xml'))) {
+      console.log(`[${new Date().toISOString()}] [generating-tests:dependency-install] Resolving Maven dependencies...`);
       await runDocker(`docker run --rm -v "${tempDir}:/app" -w /app --user 1000 maven:3.9-amazoncorretto-17 mvn dependency:resolve -q`, 300000);
+      console.log(`[${new Date().toISOString()}] [generating-tests:dependency-install] Maven dependencies resolved.`);
     }
   }
 }

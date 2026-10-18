@@ -179,6 +179,7 @@ export async function processJob(job: BullJob) {
         }
 
         try {
+          console.log(`[Job ${jobId}][${new Date().toISOString()}] [generating-tests:gemini-test-gen] Generating unit test for ${func.name} (${func.file})...`);
           const testCode = await generateTestWithGemini(func, redis, geminiApiKey);
           if (testCode) {
             // Setup sandbox once if we have tests to run
@@ -191,7 +192,9 @@ export async function processJob(job: BullJob) {
               setupDone = true;
             }
 
+            console.log(`[Job ${jobId}][${new Date().toISOString()}] [generating-tests:test-run] Executing sandboxed test for ${func.name}...`);
             const result = await executeTest(tempDir, func, testCode);
+            console.log(`[Job ${jobId}][${new Date().toISOString()}] [generating-tests:test-run] Finished test for ${func.name} (passed: ${result.passed}).`);
             testFindings.push({
               id: crypto.randomUUID(),
               category: "test-coverage",

@@ -263,15 +263,114 @@ export interface ApiTestCase {
   isBodyTest: boolean;
 }
 
-export function getApiTestCases(method: string): ApiTestCase[] {
+export function resolvePathParams(routePath: string): string {
+  // Replace Express :param with '1' (e.g. /users/:id -> /users/1, /repos/:owner/:repo -> /repos/1/1)
+  return routePath.replace(/:[a-zA-Z0-9_]+/g, '1');
+}
+
+export interface DerivedField {
+  name: string;
+  expectedType: 'string' | 'number' | 'boolean';
+}
+
+export function deriveBodyFieldsFromHandler(handlerCode?: string): DerivedField[] {
+  if (!handlerCode) return [];
+
+  const fields: DerivedField[] = [];
+  const seen = new Set<string>();
+
+  // 1. Destructuring: const { name, count } = req.body || {};
+  const destructureMatches = handlerCode.matchAll(/(?:const|let|var)\s*\{([^}]+)\}\s*=\s*(?:req|request)\.body/gi);
+  for (const dm of destructureMatches) {
+    const rawFields = dm[1].split(',');
+    for (const raw of rawFields) {
+      let field = raw.trim();
+      if (!field) continue;
+      field = field.split('=')[0].trim();
+      field = field.split(':')[0].trim();
+      if (field && !seen.has(field)) {
+        seen.add(field);
+        fields.push({ name: field, expectedType: 'string' });
+      }
+    }
+  }
+
+  // 2. Direct property access: req.body.foo or req.body['foo']
+  const propMatches = handlerCode.matchAll(/(?:req|request)\.body(?:\.([a-zA-Z0-9_]+)|\[['"]([a-zA-Z0-9_]+)['"]\])/g);
+  for (const match of propMatches) {
+    const field = match[1] || match[2];
+    if (field && !seen.has(field)) {
+      seen.add(field);
+      fields.push({ name: field, expectedType: 'string' });
+    }
+  }
+
+  // Infer expected types from handler checks e.g. typeof name !== 'string', typeof count !== 'number'
+  for (const df of fields) {
+    const typeRegex = new RegExp(`typeof\\s+${df.name}\\s*(!==|===|!=|==)\\s*['"](string|number|boolean)['"]`);
+    const match = handlerCode.match(typeRegex);
+    if (match) {
+      df.expectedType = match[2] as 'string' | 'number' | 'boolean';
+    } else if (/(?:id|count|num|age|amount|port|size|total|price|qty|quantity)$/i.test(df.name)) {
+      df.expectedType = 'number';
+    } else if (/(?:is|has|should)[A-Z]/.test(df.name)) {
+      df.expectedType = 'boolean';
+    }
+  }
+
+  return fields;
+}
+
+export function getApiTestCases(method: string, handlerCode?: string): ApiTestCase[] {
   const m = method.toUpperCase();
   // Body tests are ONLY valid for methods accepting a request body
   if (['POST', 'PUT', 'PATCH'].includes(m)) {
-    return [
-      { name: 'Missing Required Fields / Empty Body', payload: {}, isBodyTest: true },
-      { name: 'Invalid Data Types', payload: { "id": "not_an_int", "name": 123 }, isBodyTest: true },
+    const cases: ApiTestCase[] = [
+      { name: 'Missing Required Fields / Empty Body', payload: {}, isBodyTest: true }
     ];
+
+    const fields = deriveBodyFieldsFromHandler(handlerCode);
+    if (fields.length > 0) {
+      // Build base valid payload
+      const baseValidPayload: Record<string, any> = {};
+      for (const f of fields) {
+        if (f.expectedType === 'number') {
+          baseValidPayload[f.name] = 1;
+        } else if (f.expectedType === 'boolean') {
+          baseValidPayload[f.name] = true;
+        } else {
+          baseValidPayload[f.name] = 'valid_str';
+        }
+      }
+
+      // Send each field with a wrong type, while keeping valid values for all others
+      for (const f of fields) {
+        const wrongPayload = { ...baseValidPayload };
+        if (f.expectedType === 'number') {
+          wrongPayload[f.name] = 'not_a_number';
+        } else if (f.expectedType === 'boolean') {
+          wrongPayload[f.name] = 12345;
+        } else {
+          wrongPayload[f.name] = 12345;
+        }
+        cases.push({
+          name: `Invalid Data Types (${f.name}: wrong type)`,
+          payload: wrongPayload,
+          isBodyTest: true
+        });
+      }
+    } else {
+      // If no fields can be found, name the case "Malformed payload"
+      cases.push({
+        name: 'Malformed payload',
+        payload: { malformed_field: 123 },
+        isBodyTest: true
+      });
+    }
+
+    return cases;
   }
+
   // GET and HEAD do not accept a request body; skip body fuzzing
   if (m === 'GET' || m === 'HEAD') {
     return [
@@ -334,7 +433,22 @@ export function evaluateApiTestResult(
   }
 
   // Non-body endpoints (e.g. GET/HEAD)
-  if (statusCode >= 200 && statusCode < 400) {
+  // 5xx is a finding ('server-error-on-request', medium)
+  if (statusCode >= 500 && statusCode < 600) {
+    return {
+      id,
+      category: "api",
+      severity: "medium",
+      file,
+      lineStart: 0,
+      lineEnd: 0,
+      ruleId: "server-error-on-request",
+      message: `${m} ${path} returned server error (${statusCode}) for test case: '${testCase.name}'.`
+    };
+  }
+
+  // Below 500 passes: 4xx is informational and not a failure
+  if (statusCode >= 400 && statusCode < 500) {
     return {
       id,
       category: "api",
@@ -343,19 +457,20 @@ export function evaluateApiTestResult(
       lineStart: 0,
       lineEnd: 0,
       ruleId: "api-test-passed",
-      message: `${m} ${path} correctly returned ${statusCode} for test case: '${testCase.name}'.`
+      message: `${m} ${path} returned ${statusCode} for test case: '${testCase.name}' (client response, not a server failure).`
     };
   }
 
+  // 2xx, 3xx passes
   return {
     id,
     category: "api",
-    severity: "medium",
+    severity: "info",
     file,
     lineStart: 0,
     lineEnd: 0,
-    ruleId: "api-test-failed",
-    message: `${m} ${path} returned ${statusCode} for test case: '${testCase.name}'.`
+    ruleId: "api-test-passed",
+    message: `${m} ${path} correctly returned ${statusCode} for test case: '${testCase.name}'.`
   };
 }
 
@@ -370,7 +485,20 @@ async function runApiTests(tempDir: string, endpoints: Endpoint[], networkName: 
 
   for (const ep of endpointsToTest) {
      if (ep.method === 'LISTEN') continue;
-     const cases = getApiTestCases(ep.method);
+
+     // Extract handler code if file exists to derive body fields for fuzzing
+     let handlerCode = '';
+     if (tempDir && ep.file && ep.file !== 'Project') {
+       const fullPath = path.join(tempDir, ep.file);
+       if (fs.existsSync(fullPath)) {
+         try {
+           handlerCode = fs.readFileSync(fullPath, 'utf8');
+         } catch {}
+       }
+     }
+
+     const cases = getApiTestCases(ep.method, handlerCode);
+     const resolvedPath = resolvePathParams(ep.path);
 
      for (const tc of cases) {
        const hasBody = tc.isBodyTest && tc.payload !== undefined;
@@ -379,7 +507,7 @@ const http = require('http');
 const req = http.request({
   hostname: 'target-app',
   port: ${portUsed},
-  path: '${ep.path}',
+  path: '${resolvedPath}',
   method: '${ep.method}',
   headers: {
     ${hasBody ? "'Content-Type': 'application/json'" : ''}

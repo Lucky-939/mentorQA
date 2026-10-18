@@ -1,7 +1,69 @@
 import { describe, it, expect } from 'vitest';
-import { getApiTestCases, evaluateApiTestResult } from '../dynamicTester';
+import {
+  getApiTestCases,
+  evaluateApiTestResult,
+  resolvePathParams,
+  deriveBodyFieldsFromHandler
+} from '../dynamicTester';
 
-describe('Dynamic API Fuzzer Improvements (Item C.12)', () => {
+describe('Dynamic API Fuzzer Improvements (Round 5)', () => {
+  describe('resolvePathParams', () => {
+    it('fills :id and named route parameters with dummy value 1', () => {
+      expect(resolvePathParams('/users/:id')).toBe('/users/1');
+      expect(resolvePathParams('/repos/:owner/:repo')).toBe('/repos/1/1');
+      expect(resolvePathParams('/api/v1/posts/:postId/comments/:commentId')).toBe('/api/v1/posts/1/comments/1');
+      expect(resolvePathParams('/search')).toBe('/search');
+      expect(resolvePathParams('/data')).toBe('/data');
+    });
+  });
+
+  describe('deriveBodyFieldsFromHandler', () => {
+    it('derives field names and types from req.body destructuring and typeof assertions', () => {
+      const handlerCode = `
+        app.post('/data', (req, res) => {
+          const { name, count } = req.body || {};
+          if (!name || count === undefined) {
+            return res.status(400).json({ error: 'Missing required fields' });
+          }
+          if (typeof name !== 'string' || typeof count !== 'number') {
+            return res.status(422).json({ error: 'Invalid field types' });
+          }
+          return res.status(201).json({ status: 'ok', data: { name, count } });
+        });
+      `;
+
+      const derived = deriveBodyFieldsFromHandler(handlerCode);
+      expect(derived).toEqual([
+        { name: 'name', expectedType: 'string' },
+        { name: 'count', expectedType: 'number' }
+      ]);
+    });
+
+    it('derives fields from property access req.body.foo', () => {
+      const handlerCode = `
+        app.post('/login', (req, res) => {
+          const user = req.body.username;
+          const pass = req.body['password'];
+          const age = req.body.age;
+        });
+      `;
+      const derived = deriveBodyFieldsFromHandler(handlerCode);
+      expect(derived.map(d => d.name)).toContain('username');
+      expect(derived.map(d => d.name)).toContain('password');
+      expect(derived.map(d => d.name)).toContain('age');
+      expect(derived.find(d => d.name === 'age')?.expectedType).toBe('number');
+    });
+
+    it('returns empty array when no body fields are accessed', () => {
+      const handlerCode = `
+        app.get('/health', (req, res) => {
+          res.json({ ok: true });
+        });
+      `;
+      expect(deriveBodyFieldsFromHandler(handlerCode)).toEqual([]);
+    });
+  });
+
   describe('getApiTestCases', () => {
     it('skips empty-body and invalid data type tests for GET and HEAD requests', () => {
       const getCases = getApiTestCases('GET');
@@ -17,17 +79,32 @@ describe('Dynamic API Fuzzer Improvements (Item C.12)', () => {
       expect(headCases[0].isBodyTest).toBe(false);
     });
 
-    it('generates empty-body and invalid-types body test cases for POST, PUT, and PATCH', () => {
-      for (const method of ['POST', 'PUT', 'PATCH']) {
-        const cases = getApiTestCases(method);
-        expect(cases.length).toBe(2);
-        expect(cases[0].name).toBe('Missing Required Fields / Empty Body');
-        expect(cases[0].isBodyTest).toBe(true);
-        expect(cases[0].payload).toEqual({});
+    it('derives wrong-type test cases for each derived body field while keeping valid values for others', () => {
+      const handlerCode = `
+        const { name, count } = req.body || {};
+        if (typeof name !== 'string' || typeof count !== 'number') return res.status(422);
+      `;
 
-        expect(cases[1].name).toBe('Invalid Data Types');
-        expect(cases[1].isBodyTest).toBe(true);
-      }
+      const cases = getApiTestCases('POST', handlerCode);
+      expect(cases.length).toBe(3); // Empty body + 2 invalid field cases
+      expect(cases[0].name).toBe('Missing Required Fields / Empty Body');
+      expect(cases[0].payload).toEqual({});
+
+      // Case for name: wrong type (number 12345), count: valid value (1)
+      expect(cases[1].name).toBe('Invalid Data Types (name: wrong type)');
+      expect(cases[1].payload).toEqual({ name: 12345, count: 1 });
+
+      // Case for count: wrong type ('not_a_number'), name: valid value ('valid_str')
+      expect(cases[2].name).toBe('Invalid Data Types (count: wrong type)');
+      expect(cases[2].payload).toEqual({ name: 'valid_str', count: 'not_a_number' });
+    });
+
+    it('falls back to "Malformed payload" when no fields can be found in handler', () => {
+      const cases = getApiTestCases('POST', 'app.post("/raw", (req, res) => res.send("ok"));');
+      expect(cases.length).toBe(2);
+      expect(cases[0].name).toBe('Missing Required Fields / Empty Body');
+      expect(cases[1].name).toBe('Malformed payload');
+      expect(cases[1].payload).toEqual({ malformed_field: 123 });
     });
 
     it('returns empty array for unknown or unsupported methods', () => {
@@ -45,17 +122,17 @@ describe('Dynamic API Fuzzer Improvements (Item C.12)', () => {
       expect(result400.severity).toBe('info');
       expect(result400.message).toContain('correctly returned 400');
 
-      const result422 = evaluateApiTestResult('POST', '/items', 'routes.js', postEmptyCase, 422);
+      const result422 = evaluateApiTestResult('POST', '/data', 'routes.js', postEmptyCase, 422);
       expect(result422.ruleId).toBe('api-test-passed');
       expect(result422.severity).toBe('info');
+      expect(result422.message).toContain('correctly returned 422');
     });
 
-    it('treats 5xx on malformed input as a finding ("server error on malformed input"), not a pass', () => {
+    it('treats 5xx on malformed input as a finding ("server-error-on-malformed-input"), not a pass', () => {
       const result500 = evaluateApiTestResult('POST', '/items', 'routes.js', postEmptyCase, 500);
       expect(result500.ruleId).toBe('server-error-on-malformed-input');
       expect(result500.severity).toBe('medium');
-      expect(result500.message).toContain('server error on malformed input (500)');
-      expect(result500.message).toContain('Expected 4xx client error');
+      expect(result500.message).toContain('returned server error on malformed input (500)');
 
       const result502 = evaluateApiTestResult('PUT', '/users', 'routes.js', postEmptyCase, 502);
       expect(result502.ruleId).toBe('server-error-on-malformed-input');
@@ -68,11 +145,33 @@ describe('Dynamic API Fuzzer Improvements (Item C.12)', () => {
       expect(result200.message).toContain('returned 200 for test case: \'Missing Required Fields / Empty Body\', expected 4xx client error');
     });
 
-    it('treats 200 on GET /search as a pass (GET has no body)', () => {
-      const result = evaluateApiTestResult('GET', '/search', 'index.js', getStandardCase, 200);
-      expect(result.ruleId).toBe('api-test-passed');
-      expect(result.severity).toBe('info');
-      expect(result.message).toContain('GET /search correctly returned 200');
+    // GET / HEAD specific rule tests (Item 2)
+    it('GET/HEAD: below 500 passes (2xx, 3xx are passes; 4xx is informational and not a failure)', () => {
+      const result200 = evaluateApiTestResult('GET', '/search', 'index.js', getStandardCase, 200);
+      expect(result200.ruleId).toBe('api-test-passed');
+      expect(result200.severity).toBe('info');
+      expect(result200.message).toContain('correctly returned 200');
+
+      const result404 = evaluateApiTestResult('GET', '/users/999', 'index.js', getStandardCase, 404);
+      expect(result404.ruleId).toBe('api-test-passed');
+      expect(result404.severity).toBe('info');
+      expect(result404.message).toContain('returned 404');
+      expect(result404.message).toContain('not a server failure');
+
+      const result401 = evaluateApiTestResult('HEAD', '/admin', 'index.js', getStandardCase, 401);
+      expect(result401.ruleId).toBe('api-test-passed');
+      expect(result401.severity).toBe('info');
+    });
+
+    it('GET/HEAD: 5xx is a finding ("server-error-on-request", medium)', () => {
+      const result500 = evaluateApiTestResult('GET', '/crash', 'index.js', getStandardCase, 500);
+      expect(result500.ruleId).toBe('server-error-on-request');
+      expect(result500.severity).toBe('medium');
+      expect(result500.message).toBe("GET /crash returned server error (500) for test case: 'Standard Request'.");
+
+      const result503 = evaluateApiTestResult('HEAD', '/heavy', 'index.js', getStandardCase, 503);
+      expect(result503.ruleId).toBe('server-error-on-request');
+      expect(result503.severity).toBe('medium');
     });
   });
 });
