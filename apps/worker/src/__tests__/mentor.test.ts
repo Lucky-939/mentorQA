@@ -19,7 +19,8 @@ import {
   isTransientNetworkError,
   buildBatchPrompt,
   stripDelimitersUntilStable,
-  sanitizePromptField
+  sanitizePromptField,
+  getMentorConfig
 } from '../mentor';
 import { Finding, EnrichmentStats } from '@mentorqa/shared-types';
 
@@ -585,6 +586,173 @@ import { D } from './d';`;
       expect(stats.referencedMissingFiles).toBe(1);
       // 'create new file src/new_helper.ts' and 'extract ... src/new_shared.ts' -> suggestedNewFiles
       expect(stats.suggestedNewFiles).toBe(2);
+    });
+
+    it('enforces beforeCode must be a whitespace-normalised substring of the snippet sent', () => {
+      const stats: EnrichmentStats = {
+        eligible: 1,
+        groups: 1,
+        findingsEnriched: 0,
+        cached: 0,
+        apiCalls: 0,
+        groupsFirstPassValid: 0,
+        groupsRepaired: 0,
+        fallback: 0,
+        skippedQuota: 0,
+        skippedCap: 0,
+        droppedCode: 0,
+        referencedMissingFiles: 0,
+        suggestedNewFiles: 0,
+        durationMs: 0,
+        model: 'gemini-3.1-flash-lite',
+        promptVersion: PROMPT_VERSION
+      };
+
+      const groupWithMultilineSnippet: FindingGroup = {
+        id: 'security|xss|src/render.ts',
+        category: 'security',
+        ruleId: 'xss',
+        file: 'src/render.ts',
+        highestSeverity: 'high',
+        findings: [],
+        locations: ['L5-L10'],
+        snippet: 'function render(val) {\n    return   res.send(   "<div>" + val + "</div>"  );\n}'
+      };
+
+      // beforeCode has different whitespace and indentation from snippet
+      const item = {
+        id: groupWithMultilineSnippet.id,
+        explanation: 'Reflected XSS in render.',
+        whyItMatters: 'Allows script execution.',
+        howToFix: ['1. Escape html.'],
+        beforeCode: 'return res.send( "<div>" + val + "</div>" );',
+        afterCode: 'return res.send(escapeHtml(val));',
+        concept: { name: 'XSS', summary: 'Escape untrusted data.' }
+      };
+
+      const checked = applyGroundingChecks(item, groupWithMultilineSnippet, new Set(['src/render.ts']), stats);
+      expect(checked.beforeCode).toBe('return res.send( "<div>" + val + "</div>" );');
+      expect(checked.afterCode).toBe('return res.send(escapeHtml(val));');
+      expect(stats.droppedCode).toBe(0);
+    });
+
+    it('enforces beforeCode and afterCode are null when no snippet was sent', () => {
+      const stats: EnrichmentStats = {
+        eligible: 1,
+        groups: 1,
+        findingsEnriched: 0,
+        cached: 0,
+        apiCalls: 0,
+        groupsFirstPassValid: 0,
+        groupsRepaired: 0,
+        fallback: 0,
+        skippedQuota: 0,
+        skippedCap: 0,
+        droppedCode: 0,
+        referencedMissingFiles: 0,
+        suggestedNewFiles: 0,
+        durationMs: 0,
+        model: 'gemini-3.1-flash-lite',
+        promptVersion: PROMPT_VERSION
+      };
+
+      const groupNoSnippet: FindingGroup = {
+        id: 'api|broken-auth|src/routes.ts',
+        category: 'api',
+        ruleId: 'broken-auth',
+        file: 'src/routes.ts',
+        highestSeverity: 'high',
+        findings: [],
+        locations: ['L0-0'],
+        snippet: null
+      };
+
+      const itemWithCode = {
+        id: groupNoSnippet.id,
+        explanation: 'Route lacks auth middleware.',
+        whyItMatters: 'Unauthorized access.',
+        howToFix: ['1. Add auth middleware.'],
+        beforeCode: 'router.get("/admin", handler);',
+        afterCode: 'router.get("/admin", requireAuth, handler);',
+        concept: { name: 'Broken Object Level Auth', summary: 'Check permissions.' }
+      };
+
+      const checked = applyGroundingChecks(itemWithCode, groupNoSnippet, new Set(['src/routes.ts']), stats);
+      expect(checked.beforeCode).toBeNull();
+      expect(checked.afterCode).toBeNull();
+      expect(stats.droppedCode).toBe(1);
+    });
+
+    it('enforces architecture groups never carry code (beforeCode and afterCode are always null)', () => {
+      const stats: EnrichmentStats = {
+        eligible: 1,
+        groups: 1,
+        findingsEnriched: 0,
+        cached: 0,
+        apiCalls: 0,
+        groupsFirstPassValid: 0,
+        groupsRepaired: 0,
+        fallback: 0,
+        skippedQuota: 0,
+        skippedCap: 0,
+        droppedCode: 0,
+        referencedMissingFiles: 0,
+        suggestedNewFiles: 0,
+        durationMs: 0,
+        model: 'gemini-3.1-flash-lite',
+        promptVersion: PROMPT_VERSION
+      };
+
+      const godClassGroup: FindingGroup = {
+        id: 'architecture|god-class|apps/worker/src/index.ts',
+        category: 'architecture',
+        ruleId: 'god-class',
+        file: 'apps/worker/src/index.ts',
+        highestSeverity: 'medium',
+        findings: [],
+        locations: ['L0-0'],
+        snippet: 'import { Worker } from "bullmq";\nimport { prisma } from "@mentorqa/db";'
+      };
+
+      const item = {
+        id: godClassGroup.id,
+        explanation: 'God class detected.',
+        whyItMatters: 'SRP violation.',
+        howToFix: ['1. Split into separate service files.'],
+        beforeCode: 'import { Worker } from "bullmq";',
+        afterCode: 'import { Worker } from "bullmq";\nconst worker = new Worker("queue", handler);',
+        concept: { name: 'SRP', summary: 'Single responsibility.' }
+      };
+
+      const checked = applyGroundingChecks(item, godClassGroup, new Set(['apps/worker/src/index.ts']), stats);
+      expect(checked.beforeCode).toBeNull();
+      expect(checked.afterCode).toBeNull();
+      expect(stats.droppedCode).toBe(1);
+
+      const layeringGroup: FindingGroup = {
+        id: 'architecture|layering-violation|apps/api/src/routes/repos.ts',
+        category: 'architecture',
+        ruleId: 'layering-violation',
+        file: 'apps/api/src/routes/repos.ts',
+        highestSeverity: 'medium',
+        findings: [],
+        locations: ['L0-0'],
+        snippet: 'import { prisma } from "@mentorqa/db";'
+      };
+
+      const item2 = {
+        id: layeringGroup.id,
+        explanation: 'Layering violation.',
+        whyItMatters: 'Couples DB to route.',
+        howToFix: ['1. Delegate to service layer.'],
+        beforeCode: 'import { prisma } from "@mentorqa/db";',
+        afterCode: 'import { repoService } from "../services/repoService";',
+        concept: { name: 'Layered Architecture', summary: 'Separate concerns.' }
+      };
+
+      const checked2 = applyGroundingChecks(item2, layeringGroup, new Set(['apps/api/src/routes/repos.ts']), stats);
+      expect(checked2.beforeCode).toBeNull();
+      expect(checked2.afterCode).toBeNull();
     });
   });
 
@@ -1167,6 +1335,26 @@ import { D } from './d';`;
       expect(fakeFetch).toHaveBeenCalledTimes(2); // 2 attempts for batch 1, 0 for batch 2
       expect(enrichedFindings[0].metadata?.mentorStatus).toBe('skipped-unavailable');
       expect(enrichedFindings[1].metadata?.mentorStatus).toBe('skipped-unavailable');
+    });
+
+    it('defaults GEMINI_REQUEST_TIMEOUT_MS to 12000, 2 attempts and 2s delay yielding worst-case 26s within 30s budget', () => {
+      const origTimeout = process.env.GEMINI_REQUEST_TIMEOUT_MS;
+      delete process.env.GEMINI_REQUEST_TIMEOUT_MS;
+      try {
+        const config = getMentorConfig();
+        expect(config.requestTimeoutMs).toBe(12000);
+
+        const maxAttempts = 2;
+        const retryDelayMs = 2000;
+        const timeoutMs = config.requestTimeoutMs ?? 12000;
+        const worstCaseMs = (maxAttempts * timeoutMs) + ((maxAttempts - 1) * retryDelayMs);
+        expect(worstCaseMs).toBe(26000);
+        expect(worstCaseMs).toBeLessThanOrEqual(30000);
+      } finally {
+        if (origTimeout !== undefined) {
+          process.env.GEMINI_REQUEST_TIMEOUT_MS = origTimeout;
+        }
+      }
     });
   });
 

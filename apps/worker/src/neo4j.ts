@@ -138,6 +138,11 @@ export async function detectArchitecturalFlaws(repositoryId: string) {
           lineEnd: 0,
           message: `God class detected: ${record.get('name')} has unusually high coupling (degree ${record.get('degree')} vs repo average ${avg.toFixed(1)}).`,
           ruleId: "god-class",
+          metadata: {
+            degree: record.get('degree'),
+            repoMean: Number(avg.toFixed(1)),
+            threshold: Number(threshold.toFixed(1))
+          }
         });
       }
     }
