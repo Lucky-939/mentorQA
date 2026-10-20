@@ -330,10 +330,12 @@ export async function processJob(job: BullJob) {
     }
 
     // Save findings to Review model
+    const serializedFindings = JSON.parse(JSON.stringify(allFindings));
+    const serializedStats = enrichmentStats ? JSON.parse(JSON.stringify(enrichmentStats)) : undefined;
     await prisma.review.upsert({
       where: { jobId },
-      update: { findings: allFindings, enrichmentStats },
-      create: { jobId, findings: allFindings, enrichmentStats }
+      update: { findings: serializedFindings, enrichmentStats: serializedStats },
+      create: { jobId, findings: serializedFindings, enrichmentStats: serializedStats }
     });
 
     if (analysisSuccess) {

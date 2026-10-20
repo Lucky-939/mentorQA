@@ -113,8 +113,10 @@ export async function detectArchitecturalFlaws(repositoryId: string) {
     `, { repositoryId });
     
     if (statsRes.records.length > 0) {
-      const avg = statsRes.records[0].get('avgDegree');
-      const stddev = statsRes.records[0].get('stdDevDegree');
+      const avgRaw = statsRes.records[0].get('avgDegree');
+      const stddevRaw = statsRes.records[0].get('stdDevDegree');
+      const avg = typeof avgRaw?.toNumber === 'function' ? avgRaw.toNumber() : Number(avgRaw || 0);
+      const stddev = typeof stddevRaw?.toNumber === 'function' ? stddevRaw.toNumber() : Number(stddevRaw || 0);
       const threshold = avg + (2 * stddev);
       
       const godClassesRes = await session.run(`
@@ -129,6 +131,8 @@ export async function detectArchitecturalFlaws(repositoryId: string) {
       `, { repositoryId, threshold });
 
       for (const record of godClassesRes.records) {
+        const degreeRaw = record.get('degree');
+        const degreeNum = typeof degreeRaw?.toNumber === 'function' ? degreeRaw.toNumber() : Number(degreeRaw || 0);
         findings.push({
           id: crypto.randomUUID(),
           category: "architecture",
@@ -136,10 +140,10 @@ export async function detectArchitecturalFlaws(repositoryId: string) {
           file: record.get('file') || record.get('name') || 'Project',
           lineStart: 0,
           lineEnd: 0,
-          message: `God class detected: ${record.get('name')} has unusually high coupling (degree ${record.get('degree')} vs repo average ${avg.toFixed(1)}).`,
+          message: `God class detected: ${record.get('name')} has unusually high coupling (degree ${degreeNum} vs repo average ${avg.toFixed(1)}).`,
           ruleId: "god-class",
           metadata: {
-            degree: record.get('degree'),
+            degree: degreeNum,
             repoMean: Number(avg.toFixed(1)),
             threshold: Number(threshold.toFixed(1))
           }
