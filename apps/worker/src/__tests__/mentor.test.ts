@@ -1586,8 +1586,9 @@ import { D } from './d';`;
 
       expect(exp1).toBeDefined();
       expect(exp2).toBeDefined();
-      // Verifies that duplicate explanations in the batch are made unique
-      expect(exp1).not.toBe(exp2);
+      // Model output text is preserved verbatim without appending or altering
+      expect(exp1).toBe(exp2);
+      expect(stats.duplicateExplanations).toBe(1);
 
       // Verify prompt instruction payload sent to Gemini instructs concrete import naming and uniqueness
       const callArgs = mockFetch.mock.calls[0];

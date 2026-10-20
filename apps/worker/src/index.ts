@@ -11,7 +11,7 @@ import { generateTestWithGemini, KeyFunction } from './testGenerator';
 import { setupSandbox, executeTest } from './sandbox';
 import { executeDynamicTests, Endpoint } from './dynamicTester';
 import { storeGraph, detectArchitecturalFlaws } from './neo4j';
-import { enrichFindings, verifyGeminiModel } from './mentor';
+import { enrichFindings, verifyGeminiModel, getMentorConfig, RETRY_DELAY_503_MS } from './mentor';
 import { Finding } from '@mentorqa/shared-types';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
@@ -142,7 +142,7 @@ export async function processJob(job: BullJob) {
     console.log(`[Job ${jobId}] Status: generating-tests`);
 
     const testFindings: Prisma.InputJsonValue[] = [];
-    const maxFunctions = parseInt(process.env.GEMINI_MAX_FUNCTIONS_PER_RUN || '15', 10);
+    const maxFunctions = parseInt(process.env.GEMINI_MAX_FUNCTIONS_PER_RUN || '3', 10);
     const geminiApiKey = process.env.GEMINI_API_KEY;
 
     if (!geminiApiKey) {
@@ -386,6 +386,31 @@ async function main() {
   console.log(`[MentorQA Startup] Imported undici version: ${undiciPkg.version}, process.versions.undici: ${(process.versions as any).undici || 'none (Node runtime)'}`);
   await prisma.$connect();
   console.log('✅ Database connected');
+
+  const mentorConfig = getMentorConfig();
+  const testGenConfig = {
+    model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite',
+    maxFunctions: parseInt(process.env.GEMINI_MAX_FUNCTIONS_PER_RUN || '3', 10),
+  };
+  console.log('[MentorQA Startup] Effective Config:\n' + JSON.stringify({
+    mentor: {
+      model: mentorConfig.model,
+      fallbackModel: mentorConfig.fallbackModel,
+      maxEnrichPerRun: mentorConfig.maxEnrichPerRun,
+      batchSize: mentorConfig.batchSize,
+      requestTimeoutMs: mentorConfig.requestTimeoutMs,
+      retryDelayMs: RETRY_DELAY_503_MS,
+      maxAttempts: 2,
+      deadApiWorstCaseMs: (mentorConfig.requestTimeoutMs || 12000) * 2 + RETRY_DELAY_503_MS,
+      stageTimeoutMs: mentorConfig.timeoutMs,
+      enabled: mentorConfig.enabled,
+      debugPrompts: mentorConfig.debugPrompts
+    },
+    testGeneration: {
+      model: testGenConfig.model,
+      maxFunctionsPerRun: testGenConfig.maxFunctions
+    }
+  }, null, 2));
 
   const apiKey = process.env.GEMINI_API_KEY;
   const geminiModel = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';

@@ -31,7 +31,7 @@ export function getMentorConfig(): MentorConfig {
     model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite',
     fallbackModel: process.env.GEMINI_FALLBACK_MODEL || undefined,
     maxEnrichPerRun: parseInt(process.env.GEMINI_MAX_ENRICH_PER_RUN || '12', 10),
-    batchSize: parseInt(process.env.GEMINI_ENRICH_BATCH_SIZE || '3', 10),
+    batchSize: parseInt(process.env.GEMINI_ENRICH_BATCH_SIZE || '1', 10),
     debugPrompts: process.env.DEBUG_MENTOR_PROMPTS === 'true' || process.env.MENTOR_DRY_RUN === 'true',
     dryRun: process.env.MENTOR_DRY_RUN === 'true',
     enabled: process.env.MENTOR_ENABLED !== 'false',
@@ -536,8 +536,8 @@ export function applyGroundingChecks(
 /**
  * ── 8. GEMINI CALL, RETRY & REPAIR ─────────────────────────────────────────────
  */
-export const RETRY_DELAY_503_MS = 2000;
-export const RETRY_DELAY_NETWORK_MS = 2000;
+export const RETRY_DELAY_503_MS = parseInt(process.env.GEMINI_RETRY_DELAY_MS || '1000', 10);
+export const RETRY_DELAY_NETWORK_MS = parseInt(process.env.GEMINI_RETRY_DELAY_MS || '1000', 10);
 
 export function createFreshDispatcher(): Agent {
   return new Agent({
@@ -922,10 +922,11 @@ No markdown fences outside the JSON.`;
   for (const item of parsedBatch.items) {
     if (requestedIds.has(item.id)) {
       if (seenExplanations.has(item.explanation.trim())) {
-        console.warn(`[MentorQA] Duplicate explanation detected in batch for finding ${item.id}. Making unique.`);
-        item.explanation = `${item.explanation} (file: ${item.id.split('|')[2] || item.id})`;
+        console.warn(`[MentorQA] Duplicate explanation detected in batch for finding ${item.id}.`);
+        stats.duplicateExplanations = (stats.duplicateExplanations || 0) + 1;
+      } else {
+        seenExplanations.add(item.explanation.trim());
       }
-      seenExplanations.add(item.explanation.trim());
       results.set(item.id, item);
     }
   }
@@ -998,7 +999,8 @@ export async function enrichFindings(
     suggestedNewFiles: 0,
     durationMs: 0,
     model: config.model,
-    promptVersion: PROMPT_VERSION
+    promptVersion: PROMPT_VERSION,
+    duplicateExplanations: 0
   };
 
   // Step 0: Check if MENTOR_ENABLED is false

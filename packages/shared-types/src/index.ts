@@ -102,6 +102,7 @@ export interface EnrichmentStats {
   durationMs: number;
   model: string;
   promptVersion: number;
+  duplicateExplanations?: number;
   tokenUsage?: {
     promptTokens?: number;
     candidatesTokens?: number;

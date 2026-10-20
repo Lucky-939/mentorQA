@@ -382,8 +382,23 @@ def analyze_java_with_jar(repo_path: str) -> tuple[List[Finding], List[KeyFuncti
     )
 
     if not os.path.exists(jar_path):
+        cause = f"JAR not found at {jar_path}"
         print(f"Java analyzer JAR not found at {jar_path}")
-        return findings, key_functions, endpoints
+        findings.append(
+            Finding(
+                id=str(uuid.uuid4()),
+                category="code-smell",
+                severity="info",
+                file="pom.xml" if os.path.exists(os.path.join(repo_path, "pom.xml")) else (
+                    "build.gradle" if os.path.exists(os.path.join(repo_path, "build.gradle")) else "Project"
+                ),
+                lineStart=0,
+                lineEnd=0,
+                message=f"Java static analyzer unavailable: {cause}",
+                ruleId="analyzer-unavailable",
+            )
+        )
+        return findings, key_functions, endpoints, [], []
 
     try:
         result = subprocess.run(
@@ -397,12 +412,59 @@ def analyze_java_with_jar(repo_path: str) -> tuple[List[Finding], List[KeyFuncti
                     if "id" not in item:
                         item["id"] = str(uuid.uuid4())
                     findings.append(Finding(**item))
-            except json.JSONDecodeError:
-                print("Failed to parse java-analyzer JSON output")
+            except json.JSONDecodeError as e:
+                cause = f"Failed to parse java-analyzer JSON output: {e}"
+                print(cause)
+                findings.append(
+                    Finding(
+                        id=str(uuid.uuid4()),
+                        category="code-smell",
+                        severity="info",
+                        file="pom.xml" if os.path.exists(os.path.join(repo_path, "pom.xml")) else (
+                            "build.gradle" if os.path.exists(os.path.join(repo_path, "build.gradle")) else "Project"
+                        ),
+                        lineStart=0,
+                        lineEnd=0,
+                        message=f"Java static analyzer unavailable: {cause}",
+                        ruleId="analyzer-unavailable",
+                    )
+                )
     except subprocess.CalledProcessError as e:
-        print(f"Java analyzer failed: {e.stderr}")
+        cause = f"Process exited with code {e.returncode}: {e.stderr or e.stdout}"
+        print(f"Java analyzer failed: {cause}")
+        findings.append(
+            Finding(
+                id=str(uuid.uuid4()),
+                category="code-smell",
+                severity="info",
+                file="pom.xml" if os.path.exists(os.path.join(repo_path, "pom.xml")) else (
+                    "build.gradle" if os.path.exists(os.path.join(repo_path, "build.gradle")) else "Project"
+                ),
+                lineStart=0,
+                lineEnd=0,
+                message=f"Java static analyzer unavailable: {cause}",
+                ruleId="analyzer-unavailable",
+            )
+        )
+    except FileNotFoundError as e:
+        cause = f"Java runtime not found on system: {e}"
+        print(f"Java analyzer failed: {cause}")
+        findings.append(
+            Finding(
+                id=str(uuid.uuid4()),
+                category="code-smell",
+                severity="info",
+                file="pom.xml" if os.path.exists(os.path.join(repo_path, "pom.xml")) else (
+                    "build.gradle" if os.path.exists(os.path.join(repo_path, "build.gradle")) else "Project"
+                ),
+                lineStart=0,
+                lineEnd=0,
+                message=f"Java static analyzer unavailable: {cause}",
+                ruleId="analyzer-unavailable",
+            )
+        )
 
-    return findings, key_functions, [], [], []
+    return findings, key_functions, endpoints, [], []
 
 
 def run_static_analysis(
