@@ -54,6 +54,7 @@ model Review {
   jobId           String   @unique
   findings        Json? // Will hold Array of Finding objects
   enrichmentStats Json?
+  metadata        Json?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

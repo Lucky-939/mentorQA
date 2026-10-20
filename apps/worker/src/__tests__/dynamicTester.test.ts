@@ -6,7 +6,7 @@ import {
   deriveBodyFieldsFromHandler
 } from '../dynamicTester';
 
-describe('Dynamic API Fuzzer Improvements (Round 5)', () => {
+describe('Dynamic API Fuzzer Improvements (Round 5 & 6)', () => {
   describe('resolvePathParams', () => {
     it('fills :id and named route parameters with dummy value 1', () => {
       expect(resolvePathParams('/users/:id')).toBe('/users/1');
@@ -79,7 +79,7 @@ describe('Dynamic API Fuzzer Improvements (Round 5)', () => {
       expect(headCases[0].isBodyTest).toBe(false);
     });
 
-    it('derives wrong-type test cases for each derived body field while keeping valid values for others', () => {
+    it('derives wrong-type test cases labeled (inferred) for each derived body field while keeping valid values for others', () => {
       const handlerCode = `
         const { name, count } = req.body || {};
         if (typeof name !== 'string' || typeof count !== 'number') return res.status(422);
@@ -91,12 +91,16 @@ describe('Dynamic API Fuzzer Improvements (Round 5)', () => {
       expect(cases[0].payload).toEqual({});
 
       // Case for name: wrong type (number 12345), count: valid value (1)
-      expect(cases[1].name).toBe('Invalid Data Types (name: wrong type)');
+      expect(cases[1].name).toBe('Invalid Data Types (name: wrong type) (inferred)');
       expect(cases[1].payload).toEqual({ name: 12345, count: 1 });
 
       // Case for count: wrong type ('not_a_number'), name: valid value ('valid_str')
-      expect(cases[2].name).toBe('Invalid Data Types (count: wrong type)');
+      expect(cases[2].name).toBe('Invalid Data Types (count: wrong type) (inferred)');
       expect(cases[2].payload).toEqual({ name: 'valid_str', count: 'not_a_number' });
+
+      // Verifies finding text includes (inferred)
+      const finding = evaluateApiTestResult('POST', '/data', 'index.js', cases[1], 422);
+      expect(finding.message).toContain('(inferred)');
     });
 
     it('falls back to "Malformed payload" when no fields can be found in handler', () => {
@@ -145,22 +149,29 @@ describe('Dynamic API Fuzzer Improvements (Round 5)', () => {
       expect(result200.message).toContain('returned 200 for test case: \'Missing Required Fields / Empty Body\', expected 4xx client error');
     });
 
-    // GET / HEAD specific rule tests (Item 2)
-    it('GET/HEAD: below 500 passes (2xx, 3xx are passes; 4xx is informational and not a failure)', () => {
+    // GET / HEAD rules (Round 6)
+    it('GET/HEAD: 404 is inconclusive ("api-test-inconclusive", info)', () => {
+      const resultGet404 = evaluateApiTestResult('GET', '/users/999', 'index.js', getStandardCase, 404);
+      expect(resultGet404.ruleId).toBe('api-test-inconclusive');
+      expect(resultGet404.severity).toBe('info');
+      expect(resultGet404.message).toBe('GET /users/999 route may not be reachable at this path (router prefix or missing record)');
+
+      const resultHead404 = evaluateApiTestResult('HEAD', '/missing', 'index.js', getStandardCase, 404);
+      expect(resultHead404.ruleId).toBe('api-test-inconclusive');
+      expect(resultHead404.severity).toBe('info');
+      expect(resultHead404.message).toBe('HEAD /missing route may not be reachable at this path (router prefix or missing record)');
+    });
+
+    it('GET/HEAD: non-404 below 500 passes (2xx, 3xx are passes; 4xx other than 404 is informational)', () => {
       const result200 = evaluateApiTestResult('GET', '/search', 'index.js', getStandardCase, 200);
       expect(result200.ruleId).toBe('api-test-passed');
       expect(result200.severity).toBe('info');
       expect(result200.message).toContain('correctly returned 200');
 
-      const result404 = evaluateApiTestResult('GET', '/users/999', 'index.js', getStandardCase, 404);
-      expect(result404.ruleId).toBe('api-test-passed');
-      expect(result404.severity).toBe('info');
-      expect(result404.message).toContain('returned 404');
-      expect(result404.message).toContain('not a server failure');
-
       const result401 = evaluateApiTestResult('HEAD', '/admin', 'index.js', getStandardCase, 401);
       expect(result401.ruleId).toBe('api-test-passed');
       expect(result401.severity).toBe('info');
+      expect(result401.message).toContain('returned 401 for test case: \'Standard Request\' (client response, not a server failure)');
     });
 
     it('GET/HEAD: 5xx is a finding ("server-error-on-request", medium)', () => {
@@ -172,6 +183,55 @@ describe('Dynamic API Fuzzer Improvements (Round 5)', () => {
       const result503 = evaluateApiTestResult('HEAD', '/heavy', 'index.js', getStandardCase, 503);
       expect(result503.ruleId).toBe('server-error-on-request');
       expect(result503.severity).toBe('medium');
+    });
+  });
+
+  // Item 9 unit test (Commit c2e463c)
+  describe('Neo4j Integer and Finding Metadata Serialization (c2e463c)', () => {
+    it('converts Neo4j Integer objects to primitive numbers and serializes cleanly to JSON without error', () => {
+      // Mock Neo4j Integer object as returned by driver
+      const mockNeo4jInteger = {
+        low: 12,
+        high: 0,
+        toNumber: () => 12,
+        inSafeRange: () => true
+      };
+
+      const degreeNum = typeof (mockNeo4jInteger as any)?.toNumber === 'function' 
+        ? (mockNeo4jInteger as any).toNumber() 
+        : Number(mockNeo4jInteger || 0);
+
+      const avgRaw = { low: 3, high: 0, toNumber: () => 3.25 };
+      const avg = typeof (avgRaw as any)?.toNumber === 'function' ? (avgRaw as any).toNumber() : Number(avgRaw || 0);
+      const threshold = avg + 2 * 3.54;
+
+      const finding = {
+        id: 'test-god-class-finding',
+        category: 'architecture',
+        severity: 'medium',
+        file: 'apps/worker/src/index.ts',
+        lineStart: 0,
+        lineEnd: 0,
+        message: `God class detected: index.ts has unusually high coupling (degree ${degreeNum} vs repo average ${avg.toFixed(1)}).`,
+        ruleId: 'god-class',
+        metadata: {
+          degree: degreeNum,
+          repoMean: Number(avg.toFixed(1)),
+          threshold: Number(threshold.toFixed(1))
+        }
+      };
+
+      expect(typeof finding.metadata.degree).toBe('number');
+      expect(finding.metadata.degree).toBe(12);
+      expect(typeof finding.metadata.repoMean).toBe('number');
+      expect(finding.metadata.repoMean).toBe(3.3);
+
+      // Verify clean JSON serialization (Prisma review upsert requirement)
+      expect(() => {
+        const serialized = JSON.parse(JSON.stringify([finding]));
+        expect(serialized[0].metadata.degree).toBe(12);
+        expect(serialized[0].metadata.repoMean).toBe(3.3);
+      }).not.toThrow();
     });
   });
 });

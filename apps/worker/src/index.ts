@@ -329,13 +329,30 @@ export async function processJob(job: BullJob) {
       console.error(`[Job ${jobId}] Enrichment stage error (proceeding with raw findings):`, enrichErr.message);
     }
 
+    // Calculate reachable vs inconclusive endpoint counts for review metadata
+    const apiFindings = allFindings.filter((f: any) => f.category === 'api');
+    const inconclusiveCount = apiFindings.filter((f: any) => f.ruleId === 'api-test-inconclusive').length;
+    const reachableCount = apiFindings.filter((f: any) => 
+      ['api-test-passed', 'api-test-failed', 'server-error-on-malformed-input', 'server-error-on-request'].includes(f.ruleId)
+    ).length;
+
+    const reviewMetadata = {
+      reachableEndpoints: reachableCount,
+      inconclusiveEndpoints: inconclusiveCount
+    };
+
     // Save findings to Review model
     const serializedFindings = JSON.parse(JSON.stringify(allFindings));
-    const serializedStats = enrichmentStats ? JSON.parse(JSON.stringify(enrichmentStats)) : undefined;
+    const serializedStats = enrichmentStats ? JSON.parse(JSON.stringify({
+      ...enrichmentStats,
+      reachableEndpoints: reachableCount,
+      inconclusiveEndpoints: inconclusiveCount
+    })) : { reachableEndpoints: reachableCount, inconclusiveEndpoints: inconclusiveCount };
+
     await prisma.review.upsert({
       where: { jobId },
-      update: { findings: serializedFindings, enrichmentStats: serializedStats },
-      create: { jobId, findings: serializedFindings, enrichmentStats: serializedStats }
+      update: { findings: serializedFindings, enrichmentStats: serializedStats, metadata: reviewMetadata },
+      create: { jobId, findings: serializedFindings, enrichmentStats: serializedStats, metadata: reviewMetadata }
     });
 
     if (analysisSuccess) {

@@ -354,7 +354,7 @@ export function getApiTestCases(method: string, handlerCode?: string): ApiTestCa
           wrongPayload[f.name] = 12345;
         }
         cases.push({
-          name: `Invalid Data Types (${f.name}: wrong type)`,
+          name: `Invalid Data Types (${f.name}: wrong type) (inferred)`,
           payload: wrongPayload,
           isBodyTest: true
         });
@@ -444,6 +444,20 @@ export function evaluateApiTestResult(
       lineEnd: 0,
       ruleId: "server-error-on-request",
       message: `${m} ${path} returned server error (${statusCode}) for test case: '${testCase.name}'.`
+    };
+  }
+
+  // A 404 on GET/HEAD must not be a pass: ruleId 'api-test-inconclusive' (info), "route may not be reachable at this path (router prefix or missing record)"
+  if (['GET', 'HEAD'].includes(m) && statusCode === 404) {
+    return {
+      id,
+      category: "api",
+      severity: "info",
+      file,
+      lineStart: 0,
+      lineEnd: 0,
+      ruleId: "api-test-inconclusive",
+      message: `${m} ${path} route may not be reachable at this path (router prefix or missing record)`
     };
   }
 

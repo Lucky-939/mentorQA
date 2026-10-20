@@ -1467,4 +1467,134 @@ import { D } from './d';`;
       expect(keyLite).not.toBe(keyFlash);
     });
   });
+
+  // ── Round 6 Prompt Freeze & Architecture Tests ─────────────────────────────────
+  describe('Round 6 - Architecture Prompt Instructions & Batch Deduplication (Item 5)', () => {
+    it('bumps PROMPT_VERSION to 5', () => {
+      expect(PROMPT_VERSION).toBe(5);
+    });
+
+    it('ensures no two findings in one batch get the same explanation text', async () => {
+      const group1: FindingGroup = {
+        id: 'architecture|god-class|apps/worker/src/index.ts',
+        category: 'architecture',
+        ruleId: 'god-class',
+        file: 'apps/worker/src/index.ts',
+        highestSeverity: 'medium',
+        findings: [{
+          id: 'f1',
+          category: 'architecture',
+          severity: 'medium',
+          file: 'apps/worker/src/index.ts',
+          lineStart: 0,
+          lineEnd: 0,
+          message: 'God class detected: index.ts has unusually high coupling (degree 12 vs repo average 3.3).',
+          ruleId: 'god-class'
+        }],
+        locations: ['L0-0'],
+        snippet: 'import { storeGraph } from "./neo4j";\nimport Redis from "ioredis";'
+      };
+
+      const group2: FindingGroup = {
+        id: 'architecture|god-class|apps/api/src/app.ts',
+        category: 'architecture',
+        ruleId: 'god-class',
+        file: 'apps/api/src/app.ts',
+        highestSeverity: 'medium',
+        findings: [{
+          id: 'f2',
+          category: 'architecture',
+          severity: 'medium',
+          file: 'apps/api/src/app.ts',
+          lineStart: 0,
+          lineEnd: 0,
+          message: 'God class detected: app.ts has unusually high coupling (degree 8 vs repo average 3.3).',
+          ruleId: 'god-class'
+        }],
+        locations: ['L0-0'],
+        snippet: 'import express from "express";\nimport cors from "cors";'
+      };
+
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{
+            content: {
+              parts: [{
+                text: JSON.stringify({
+                  items: [
+                    {
+                      id: group1.id,
+                      explanation: 'This module is heavily coupled with multiple services. You should break it up.',
+                      whyItMatters: 'Tight coupling increases maintenance burden.',
+                      howToFix: ['1. Extract submodules.'],
+                      beforeCode: null,
+                      afterCode: null,
+                      concept: { name: 'Coupling', summary: 'Reduce coupling.' }
+                    },
+                    {
+                      id: group2.id,
+                      // Duplicate explanation returned by model
+                      explanation: 'This module is heavily coupled with multiple services. You should break it up.',
+                      whyItMatters: 'Tight coupling increases maintenance burden.',
+                      howToFix: ['1. Extract submodules.'],
+                      beforeCode: null,
+                      afterCode: null,
+                      concept: { name: 'Coupling', summary: 'Reduce coupling.' }
+                    }
+                  ]
+                })
+              }]
+            }
+          }]
+        })
+      });
+
+      const config = getMentorConfig();
+      const stats: EnrichmentStats = {
+        eligible: 2,
+        groups: 2,
+        findingsEnriched: 0,
+        cached: 0,
+        apiCalls: 0,
+        groupsFirstPassValid: 0,
+        groupsRepaired: 0,
+        fallback: 0,
+        skippedQuota: 0,
+        skippedCap: 0,
+        droppedCode: 0,
+        referencedMissingFiles: 0,
+        suggestedNewFiles: 0,
+        durationMs: 0,
+        model: 'gemini-3.1-flash-lite',
+        promptVersion: PROMPT_VERSION
+      };
+
+      const { results } = await callGeminiBatch(
+        [group1, group2],
+        config,
+        'dummy-key',
+        stats,
+        0,
+        0,
+        mockFetch as any
+      );
+
+      const exp1 = results.get(group1.id)?.explanation;
+      const exp2 = results.get(group2.id)?.explanation;
+
+      expect(exp1).toBeDefined();
+      expect(exp2).toBeDefined();
+      // Verifies that duplicate explanations in the batch are made unique
+      expect(exp1).not.toBe(exp2);
+
+      // Verify prompt instruction payload sent to Gemini instructs concrete import naming and uniqueness
+      const callArgs = mockFetch.mock.calls[0];
+      const requestBody = JSON.parse(callArgs[1].body);
+      const systemText = requestBody.systemInstruction.parts[0].text;
+      expect(systemText).toContain('The explanation must name the concrete import line(s) from the snippet');
+      expect(systemText).toContain('No two findings in one batch may get the same explanation or text');
+    });
+  });
 });
