@@ -403,6 +403,7 @@ async function main() {
       maxAttempts: 2,
       deadApiWorstCaseMs: (mentorConfig.requestTimeoutMs || 12000) * 2 + RETRY_DELAY_503_MS,
       stageTimeoutMs: mentorConfig.timeoutMs,
+      mentorStageTimeoutMs: mentorConfig.timeoutMs,
       enabled: mentorConfig.enabled,
       debugPrompts: mentorConfig.debugPrompts
     },

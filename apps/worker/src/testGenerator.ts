@@ -55,9 +55,10 @@ If Java, use JUnit.
 Output ONLY the raw executable code for the test file. DO NOT wrap it in markdown code blocks (\`\`\`). Do not include any explanations.`;
 
   console.log(`[Gemini] Fetching generation for ${func.name}...`);
+  const modelName = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
   let res: Response | null = null;
   for (let i = 0; i < 3; i++) {
-    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent`, {
+    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',

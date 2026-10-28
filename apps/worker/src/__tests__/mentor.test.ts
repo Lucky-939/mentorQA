@@ -20,7 +20,9 @@ import {
   buildBatchPrompt,
   stripDelimitersUntilStable,
   sanitizePromptField,
-  getMentorConfig
+  getMentorConfig,
+  MentorConfig,
+  RETRY_DELAY_503_MS
 } from '../mentor';
 import { Finding, EnrichmentStats } from '@mentorqa/shared-types';
 
@@ -1337,19 +1339,20 @@ import { D } from './d';`;
       expect(enrichedFindings[1].metadata?.mentorStatus).toBe('skipped-unavailable');
     });
 
-    it('defaults GEMINI_REQUEST_TIMEOUT_MS to 12000, 2 attempts and 2s delay yielding worst-case 26s within 30s budget', () => {
+    it('defaults GEMINI_REQUEST_TIMEOUT_MS to 12000, 2 attempts and 1s delay yielding worst-case 25s within 150000ms budget', () => {
       const origTimeout = process.env.GEMINI_REQUEST_TIMEOUT_MS;
       delete process.env.GEMINI_REQUEST_TIMEOUT_MS;
       try {
         const config = getMentorConfig();
         expect(config.requestTimeoutMs).toBe(12000);
+        expect(config.timeoutMs).toBe(150000);
 
         const maxAttempts = 2;
-        const retryDelayMs = 2000;
+        const retryDelayMs = RETRY_DELAY_503_MS;
         const timeoutMs = config.requestTimeoutMs ?? 12000;
         const worstCaseMs = (maxAttempts * timeoutMs) + ((maxAttempts - 1) * retryDelayMs);
-        expect(worstCaseMs).toBe(26000);
-        expect(worstCaseMs).toBeLessThanOrEqual(30000);
+        expect(worstCaseMs).toBe(25000);
+        expect(worstCaseMs).toBeLessThanOrEqual(25000);
       } finally {
         if (origTimeout !== undefined) {
           process.env.GEMINI_REQUEST_TIMEOUT_MS = origTimeout;
@@ -1597,5 +1600,103 @@ import { D } from './d';`;
       expect(systemText).toContain('The explanation must name the concrete import line(s) from the snippet');
       expect(systemText).toContain('No two findings in one batch may get the same explanation or text');
     });
+
+    it('counts identical explanations across the whole run across separate batches using normalized text without editing model text', async () => {
+      const finding1: Finding = {
+        id: 'f-norm-1',
+        category: 'security',
+        severity: 'high',
+        file: 'src/a.ts',
+        lineStart: 10,
+        lineEnd: 15,
+        message: 'Security issue A',
+        ruleId: 'sec-rule-1'
+      };
+      const finding2: Finding = {
+        id: 'f-norm-2',
+        category: 'security',
+        severity: 'high',
+        file: 'src/b.ts',
+        lineStart: 20,
+        lineEnd: 25,
+        message: 'Security issue B',
+        ruleId: 'sec-rule-2'
+      };
+
+      const originalModelText1 = 'You have a security vulnerability.  Please sanitize your input carefully.';
+      const originalModelText2 = '  you have a security vulnerability. please sanitize   your input carefully.  ';
+
+      let callIndex = 0;
+      const mockFetch = vi.fn().mockImplementation(async () => {
+        callIndex++;
+        const expText = callIndex === 1 ? originalModelText1 : originalModelText2;
+        const currentFindingId = callIndex === 1 ? 'security|sec-rule-1|src/a.ts' : 'security|sec-rule-2|src/b.ts';
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      text: JSON.stringify({
+                        items: [
+                          {
+                            id: currentFindingId,
+                            explanation: expText,
+                            whyItMatters: 'It could allow attackers to manipulate queries.',
+                            howToFix: ['Step 1: Sanitize input', 'Step 2: Validate types'],
+                            beforeCode: null,
+                            afterCode: null,
+                            concept: { name: 'Injection Defense', summary: 'Proper sanitization prevents exploits.' }
+                          }
+                        ]
+                      })
+                    }
+                  ]
+                }
+              }
+            ],
+            usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 50, totalTokenCount: 150 }
+          })
+        };
+      });
+
+      const fakeRedis: any = {
+        get: vi.fn().mockResolvedValue(null),
+        set: vi.fn().mockResolvedValue('OK')
+      };
+
+      const config: MentorConfig = {
+        model: 'gemini-3.1-flash-lite',
+        maxEnrichPerRun: 12,
+        batchSize: 1, // Separate batches
+        debugPrompts: false,
+        dryRun: false,
+        enabled: true,
+        requestTimeoutMs: 12000,
+        timeoutMs: 150000
+      };
+
+      const { enrichedFindings, stats } = await enrichFindings(
+        [finding1, finding2],
+        null,
+        fakeRedis,
+        'dummy-api-key',
+        config,
+        0,
+        0,
+        mockFetch as any
+      );
+
+      // Duplicate explanation counted across run across separate batches via normalized comparison
+      expect(stats.duplicateExplanations).toBe(1);
+
+      // Model text must NEVER be edited
+      expect(enrichedFindings[0].metadata?.mentor?.explanation).toBe(originalModelText1);
+      expect(enrichedFindings[1].metadata?.mentor?.explanation).toBe(originalModelText2);
+    });
   });
 });
+

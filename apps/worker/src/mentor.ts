@@ -26,6 +26,10 @@ export interface MentorConfig {
   timeoutMs: number;
 }
 
+export function normaliseExplanationText(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 export function getMentorConfig(): MentorConfig {
   return {
     model: process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite',
@@ -36,7 +40,7 @@ export function getMentorConfig(): MentorConfig {
     dryRun: process.env.MENTOR_DRY_RUN === 'true',
     enabled: process.env.MENTOR_ENABLED !== 'false',
     requestTimeoutMs: parseInt(process.env.GEMINI_REQUEST_TIMEOUT_MS || '12000', 10),
-    timeoutMs: parseInt(process.env.GEMINI_STAGE_TIMEOUT_MS || '60000', 10)
+    timeoutMs: parseInt(process.env.MENTOR_STAGE_TIMEOUT_MS || process.env.GEMINI_STAGE_TIMEOUT_MS || '150000', 10)
   };
 }
 
@@ -622,6 +626,20 @@ export function getEffectiveFetch(fetchFn?: typeof fetch): typeof fetch {
   return undiciFetch as any;
 }
 
+export function logGeminiCall(
+  batch: FindingGroup[],
+  durationMs: number,
+  statusOrError: string | number,
+  tokenUsage?: { promptTokens?: number; candidatesTokens?: number; totalTokens?: number } | null
+) {
+  const groupIds = batch.map((b) => b.id).join(', ');
+  const ruleIds = batch.map((b) => b.ruleId).join(', ');
+  const tokensStr = tokenUsage
+    ? `prompt=${tokenUsage.promptTokens ?? 0}, candidates=${tokenUsage.candidatesTokens ?? 0}, total=${tokenUsage.totalTokens ?? 0}`
+    : 'none';
+  console.log(`[Gemini Call] group: ${groupIds} | rule: ${ruleIds} | duration: ${durationMs}ms | status: ${statusOrError} | tokens: ${tokensStr}`);
+}
+
 export async function callGeminiBatch(
   batch: FindingGroup[],
   config: MentorConfig,
@@ -630,7 +648,8 @@ export async function callGeminiBatch(
   retryDelay503Ms = RETRY_DELAY_503_MS,
   retryDelayNetworkMs = RETRY_DELAY_NETWORK_MS,
   fetchFn: typeof fetch = undiciFetch as any,
-  stageSignal?: AbortSignal
+  stageSignal?: AbortSignal,
+  seenExplanationsAcrossRun: Map<string, string> = new Map()
 ): Promise<{ results: Map<string, MentorItemOutput>; modelUsed?: string; stopReason?: 'quota' | 'unavailable' }> {
   const actualFetch = getEffectiveFetch(fetchFn);
   const isMock = Boolean((actualFetch as any)?.mock || (actualFetch as any)?._isMockFunction);
@@ -709,6 +728,7 @@ No markdown fences outside the JSON.`;
       ? (AbortSignal as any).any([stageSignal, AbortSignal.timeout(perReqTimeout)])
       : AbortSignal.timeout(perReqTimeout);
 
+    const callStart = Date.now();
     try {
       stats.apiCalls++;
       const reqOptions: any = {
@@ -724,11 +744,14 @@ No markdown fences outside the JSON.`;
         reqOptions.dispatcher = dispatcher;
       }
       apiRes = await (actualFetch as any)(urlForModel(config.model), reqOptions);
+      const durationMs = Date.now() - callStart;
       if (!apiRes) {
+        logGeminiCall(batch, durationMs, 'null response', null);
         return { results, stopReason: 'unavailable' };
       }
 
       if (apiRes.status === 503) {
+        logGeminiCall(batch, durationMs, 503, null);
         console.warn(`[MentorQA] Gemini API returned 503 Service Unavailable (attempt ${attempt}/${maxAttempts}).`);
         if (attempt < maxAttempts) {
           await (dispatcher as any).destroy().catch(() => {});
@@ -740,24 +763,33 @@ No markdown fences outside the JSON.`;
       }
 
       if (apiRes.status === 429) {
+        logGeminiCall(batch, durationMs, 429, null);
         console.warn(`[MentorQA] Gemini API returned 429 Too Many Requests (Quota Exceeded). Stopping further calls.`);
         return { results, stopReason: 'quota' };
       }
 
       if (apiRes.status === 403 || apiRes.status === 404) {
+        logGeminiCall(batch, durationMs, apiRes.status, null);
         console.error(`[MentorQA] Gemini API returned ${apiRes.status}. Check API key and model availability.`);
         return { results, stopReason: 'unavailable' };
       }
 
       if (!apiRes.ok) {
+        logGeminiCall(batch, durationMs, apiRes.status, null);
         console.error(`[MentorQA] Gemini API returned unexpected status ${apiRes.status}`);
         return { results, stopReason: 'unavailable' };
       }
 
       // Success response on primary model
+      let callTokens: any = null;
       try {
         const data = (await apiRes.json()) as any;
         if (data.usageMetadata) {
+          callTokens = {
+            promptTokens: data.usageMetadata.promptTokenCount || 0,
+            candidatesTokens: data.usageMetadata.candidatesTokenCount || 0,
+            totalTokens: data.usageMetadata.totalTokenCount || 0
+          };
           stats.tokenUsage = {
             promptTokens: (stats.tokenUsage?.promptTokens || 0) + (data.usageMetadata.promptTokenCount || 0),
             candidatesTokens: (stats.tokenUsage?.candidatesTokens || 0) + (data.usageMetadata.candidatesTokenCount || 0),
@@ -769,8 +801,11 @@ No markdown fences outside the JSON.`;
       } catch (e: any) {
         console.error('[MentorQA] Failed to read Gemini response json:', e.message);
       }
+      logGeminiCall(batch, durationMs, apiRes.status, callTokens);
       break;
     } catch (fetchErr: any) {
+      const durationMs = Date.now() - callStart;
+      logGeminiCall(batch, durationMs, fetchErr.message || 'fetch failed', null);
       if (stageSignal?.aborted) {
         console.warn('[MentorQA] Stage budget expired during network request.');
         return { results, stopReason: 'unavailable' };
@@ -802,6 +837,7 @@ No markdown fences outside the JSON.`;
     const fallbackRequestSignal = stageSignal
       ? (AbortSignal as any).any([stageSignal, AbortSignal.timeout(perReqTimeout)])
       : AbortSignal.timeout(perReqTimeout);
+    const fallbackStart = Date.now();
     try {
       stats.apiCalls++;
       const fallbackReqOptions: any = {
@@ -817,10 +853,17 @@ No markdown fences outside the JSON.`;
         fallbackReqOptions.dispatcher = fallbackDispatcher;
       }
       const fallbackRes = await (actualFetch as any)(urlForModel(config.fallbackModel), fallbackReqOptions);
+      const fallbackDurationMs = Date.now() - fallbackStart;
 
       if (fallbackRes.ok) {
         const data = (await fallbackRes.json()) as any;
+        let fallbackTokens: any = null;
         if (data.usageMetadata) {
+          fallbackTokens = {
+            promptTokens: data.usageMetadata.promptTokenCount || 0,
+            candidatesTokens: data.usageMetadata.candidatesTokenCount || 0,
+            totalTokens: data.usageMetadata.totalTokenCount || 0
+          };
           stats.tokenUsage = {
             promptTokens: (stats.tokenUsage?.promptTokens || 0) + (data.usageMetadata.promptTokenCount || 0),
             candidatesTokens: (stats.tokenUsage?.candidatesTokens || 0) + (data.usageMetadata.candidatesTokenCount || 0),
@@ -829,11 +872,15 @@ No markdown fences outside the JSON.`;
         }
         responseText = data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
         modelUsed = config.fallbackModel;
+        logGeminiCall(batch, fallbackDurationMs, fallbackRes.status, fallbackTokens);
       } else {
+        logGeminiCall(batch, fallbackDurationMs, fallbackRes.status, null);
         console.warn(`[MentorQA] Fallback model ${config.fallbackModel} returned status ${fallbackRes.status}`);
         return { results, stopReason: 'unavailable' };
       }
     } catch (fallbackErr: any) {
+      const fallbackDurationMs = Date.now() - fallbackStart;
+      logGeminiCall(batch, fallbackDurationMs, fallbackErr.message || 'fetch failed', null);
       console.warn(`[MentorQA] Fallback model ${config.fallbackModel} failed: ${fallbackErr.message}`);
       return { results, stopReason: 'unavailable' };
     } finally {
@@ -865,6 +912,7 @@ No markdown fences outside the JSON.`;
     const repairRequestSignal = stageSignal
       ? (AbortSignal as any).any([stageSignal, AbortSignal.timeout(perReqTimeout)])
       : AbortSignal.timeout(perReqTimeout);
+    const repairStart = Date.now();
     try {
       stats.apiCalls++;
       const repairReqOptions: any = {
@@ -893,9 +941,19 @@ No markdown fences outside the JSON.`;
         repairReqOptions.dispatcher = repairDispatcher;
       }
       const repairRes = await (actualFetch as any)(urlForModel(config.model), repairReqOptions);
+      const repairDurationMs = Date.now() - repairStart;
 
       if (repairRes.ok) {
         const repairData = (await repairRes.json()) as any;
+        let repairTokens: any = null;
+        if (repairData.usageMetadata) {
+          repairTokens = {
+            promptTokens: repairData.usageMetadata.promptTokenCount || 0,
+            candidatesTokens: repairData.usageMetadata.candidatesTokenCount || 0,
+            totalTokens: repairData.usageMetadata.totalTokenCount || 0
+          };
+        }
+        logGeminiCall(batch, repairDurationMs, repairRes.status, repairTokens);
         const repairText = repairData?.candidates?.[0]?.content?.parts?.[0]?.text;
         if (repairText) {
           const rawRepaired = JSON.parse(repairText);
@@ -903,8 +961,12 @@ No markdown fences outside the JSON.`;
           stats.groupsRepaired += batch.length;
           modelUsed = config.model;
         }
+      } else {
+        logGeminiCall(batch, repairDurationMs, repairRes.status, null);
       }
     } catch (repairErr: any) {
+      const repairDurationMs = Date.now() - repairStart;
+      logGeminiCall(batch, repairDurationMs, repairErr.message || 'fetch failed', null);
       console.error('[MentorQA] Repair attempt failed:', repairErr.message);
     } finally {
       await (repairDispatcher as any).destroy().catch(() => {});
@@ -918,14 +980,17 @@ No markdown fences outside the JSON.`;
 
   // Populate results
   const requestedIds = new Set(batch.map((b) => b.id));
-  const seenExplanations = new Set<string>();
   for (const item of parsedBatch.items) {
     if (requestedIds.has(item.id)) {
-      if (seenExplanations.has(item.explanation.trim())) {
-        console.warn(`[MentorQA] Duplicate explanation detected in batch for finding ${item.id}.`);
-        stats.duplicateExplanations = (stats.duplicateExplanations || 0) + 1;
-      } else {
-        seenExplanations.add(item.explanation.trim());
+      const normExp = normaliseExplanationText(item.explanation || '');
+      if (normExp) {
+        const prevGroupId = seenExplanationsAcrossRun.get(normExp);
+        if (prevGroupId && prevGroupId !== item.id) {
+          console.warn(`[MentorQA] Duplicate explanation detected across run between group "${prevGroupId}" and group "${item.id}".`);
+          stats.duplicateExplanations = (stats.duplicateExplanations || 0) + 1;
+        } else if (!prevGroupId) {
+          seenExplanationsAcrossRun.set(normExp, item.id);
+        }
       }
       results.set(item.id, item);
     }
@@ -1124,6 +1189,7 @@ export async function enrichFindings(
   let quotaHit = false;
   let serviceUnavailable = false;
   let consecutiveNetworkFailures = 0;
+  const seenExplanationsAcrossRun = new Map<string, string>();
 
   for (let i = 0; i < uncachedGroups.length; i += config.batchSize) {
     if (stageSignal?.aborted) {
@@ -1160,7 +1226,8 @@ export async function enrichFindings(
       retryDelay503Ms,
       retryDelayNetworkMs,
       fetchFn,
-      stageSignal
+      stageSignal,
+      seenExplanationsAcrossRun
     );
 
     if (stopReason === 'quota') {

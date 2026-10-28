@@ -67,3 +67,8 @@ jobs:
         run: |
           pip install ruff
           ruff check services/analysis/
+
+      - name: Run Python tests (analysis service)
+        run: pytest -v
+        working-directory: services/analysis
+

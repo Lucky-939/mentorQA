@@ -190,7 +190,7 @@ def analyze_python_file(filepath: str, repo_path: str) -> tuple[List[Finding], L
 
 
 def analyze_js_ts_file(
-    filepath: str, repo_path: str, is_ts: bool
+    filepath: str, repo_path: str, is_ts: bool = False
 ) -> tuple[List[Finding], List[KeyFunction], List[Endpoint], List[GraphNode], List[GraphEdge]]:
     findings = []
     key_functions = []
@@ -374,12 +374,20 @@ def analyze_java_with_jar(repo_path: str) -> tuple[List[Finding], List[KeyFuncti
     # in Phase 3. The Java analyzer must be extended to parse and return KeyFunction definitions 
     # before Java test generation can be fully activated.
     key_functions = []
-    jar_path = os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),
-            "../../../apps/java-analyzer/target/java-analyzer-1.0-SNAPSHOT-jar-with-dependencies.jar",
+    # Path configurable via JAVA_ANALYZER_JAR, default matching container layout (/app/bin/java-analyzer.jar),
+    # falling back to monorepo target build directory for host development
+    env_jar = os.environ.get("JAVA_ANALYZER_JAR")
+    if env_jar:
+        jar_path = os.path.abspath(env_jar)
+    elif os.path.exists("/app/bin/java-analyzer.jar"):
+        jar_path = "/app/bin/java-analyzer.jar"
+    else:
+        jar_path = os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "../../../apps/java-analyzer/target/java-analyzer-1.0-SNAPSHOT-jar-with-dependencies.jar",
+            )
         )
-    )
 
     if not os.path.exists(jar_path):
         cause = f"JAR not found at {jar_path}"
