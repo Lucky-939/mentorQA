@@ -286,7 +286,8 @@ export async function processJob(job: BullJob) {
     // Phase 7: AI Mentor Enrichment
     let enrichmentStats: any = null;
     const stageController = new AbortController();
-    const enrichmentBudgetMs = 90000; // 90s hard overall stage budget
+    const activeMentorConfig = getMentorConfig();
+    const enrichmentBudgetMs = activeMentorConfig.timeoutMs; // e.g. 150000ms
     const budgetTimer = setTimeout(() => {
       stageController.abort();
     }, enrichmentBudgetMs);
@@ -322,7 +323,7 @@ export async function processJob(job: BullJob) {
           durationMs: enrichmentStats.durationMs
         });
       } else {
-        console.warn(`[Job ${jobId}] Enrichment stage budget expired (90s); saving completed findings.`);
+        console.warn(`[Job ${jobId}] Enrichment stage budget expired (${enrichmentBudgetMs}ms); saving completed findings.`);
       }
     } catch (enrichErr: any) {
       clearTimeout(budgetTimer);
