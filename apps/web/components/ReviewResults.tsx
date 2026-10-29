@@ -247,19 +247,43 @@ export default function ReviewResults({ findings, graphData }: ReviewResultsProp
 
         {/* ARCHITECTURE TAB */}
         {activeTab === 'ARCHITECTURE' && (
-          <div className="h-full w-full">
-            <h3 className="font-bold text-brutal-primary uppercase tracking-widest border-b border-brutal-border pb-2 mb-6">
-              Architecture Graph & Analysis
-            </h3>
-            {graphData && graphData.nodes && graphData.nodes.length > 0 ? (
-              <div className="w-full">
-                <DependencyGraph nodes={graphData.nodes} edges={graphData.edges} findings={findings} />
-              </div>
-            ) : (
-              <div className="text-brutal-muted font-mono text-sm uppercase tracking-widest py-10 text-center border border-brutal-border border-dashed">
-                [ NO ARCHITECTURE GRAPH DATA AVAILABLE ]
-              </div>
-            )}
+          <div className="space-y-8 h-full w-full">
+            <div>
+              <h3 className="font-bold text-brutal-primary uppercase tracking-widest border-b border-brutal-border pb-2 mb-6">
+                Architecture Graph & Analysis
+              </h3>
+              {graphData && graphData.nodes && graphData.nodes.length > 0 ? (
+                <div className="w-full">
+                  <DependencyGraph
+                    nodes={graphData.nodes}
+                    edges={graphData.edges}
+                    findings={findings}
+                    onOpenMentor={setActiveModalFinding}
+                  />
+                </div>
+              ) : (
+                <div className="text-brutal-muted font-mono text-sm uppercase tracking-widest py-10 text-center border border-brutal-border border-dashed">
+                  [ NO ARCHITECTURE GRAPH DATA AVAILABLE ]
+                </div>
+              )}
+            </div>
+
+            {/* Architectural Findings List */}
+            <div className="space-y-4">
+              <h4 className="font-bold text-brutal-primary uppercase tracking-widest border-b border-brutal-border pb-2 flex items-center justify-between">
+                <span>Architectural Findings</span>
+                <span className="text-xs font-mono text-brutal-muted">({categorizedFindings['ARCHITECTURE'].length})</span>
+              </h4>
+              {categorizedFindings['ARCHITECTURE'].length === 0 ? (
+                <div className="text-brutal-muted font-mono text-xs uppercase tracking-widest py-6 text-center border border-brutal-border border-dashed">
+                  [ NO ARCHITECTURAL FLAWS DETECTED ]
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {categorizedFindings['ARCHITECTURE'].map(renderFindingCard)}
+                </div>
+              )}
+            </div>
           </div>
         )}
 

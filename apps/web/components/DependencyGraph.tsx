@@ -24,16 +24,26 @@ interface DependencyGraphProps {
   nodes: GraphNode[];
   edges: GraphEdge[];
   findings: any[]; // Architectural findings to cross-reference
+  onOpenMentor?: (finding: any) => void;
 }
 
-export default function DependencyGraph({ nodes, edges, findings }: DependencyGraphProps) {
+export default function DependencyGraph({ nodes, edges, findings, onOpenMentor }: DependencyGraphProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
 
   // Cross-reference findings to nodes
-  const nodeFindings = (nodeFile: string) => {
-    return findings.filter(f => f.file === nodeFile && f.category === 'architecture');
+  const nodeFindings = (target: string | GraphNode, targetName?: string) => {
+    const file = typeof target === 'string' ? target : target?.file;
+    const name = typeof target === 'string' ? targetName : target?.name;
+    return findings.filter(f => {
+      const isArch = (f.category || '').toLowerCase().includes('architecture');
+      if (!isArch) return false;
+      const fileMatch = f.file === file || 
+        (f.file && file && (f.file.endsWith(file) || file.endsWith(f.file)));
+      const nameMatch = Boolean(name && f.message && f.message.includes(name));
+      return fileMatch || nameMatch;
+    });
   };
 
   useEffect(() => {
@@ -213,14 +223,25 @@ export default function DependencyGraph({ nodes, edges, findings }: DependencyGr
               <span className="text-white break-all">{selectedNode.file}</span>
             </div>
             
-            {nodeFindings(selectedNode.file).length > 0 && (
+            {nodeFindings(selectedNode).length > 0 && (
               <div className="mt-4">
                 <h4 className="font-bold text-red-500 uppercase mb-2">Architectural Findings</h4>
                 <div className="flex flex-col gap-2">
-                  {nodeFindings(selectedNode.file).map(f => (
-                    <div key={f.id} className="border border-red-500 bg-red-900/20 p-2 text-xs">
-                      <div className="text-red-400 font-bold">{f.ruleId}</div>
-                      <div className="text-white mt-1">{f.message}</div>
+                  {nodeFindings(selectedNode).map((f: any) => (
+                    <div key={f.id} className="border border-red-500 bg-red-900/20 p-2.5 text-xs flex flex-col gap-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-red-400 font-bold">{f.ruleId}</span>
+                        {onOpenMentor && f.metadata?.mentor && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenMentor(f)}
+                            className="px-2 py-0.5 text-[10px] font-mono font-bold uppercase tracking-widest border border-brutal-border bg-black/60 hover:bg-brutal-primary hover:text-black transition-colors text-brutal-primary cursor-pointer shrink-0"
+                          >
+                            ▶ MENTOR
+                          </button>
+                        )}
+                      </div>
+                      <div className="text-white leading-relaxed">{f.message}</div>
                     </div>
                   ))}
                 </div>
