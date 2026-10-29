@@ -42,13 +42,17 @@ export default function DashboardPage() {
   const [graphData, setGraphData] = useState<{ nodes: any[], edges: any[] } | null>(null);
   const [spinnerFrame, setSpinnerFrame] = useState(0);
 
-  // Read ?jobId= from URL to allow direct review viewing
+  // Read ?jobId= from URL or sessionStorage to allow direct review viewing across page refresh
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
-      const qJobId = params.get('jobId');
+      const qJobId = params.get('jobId') || sessionStorage.getItem('mentorqa_active_job_id');
       if (qJobId) {
         setActiveJobId(qJobId);
+        if (!params.get('jobId')) {
+          const newUrl = `${window.location.pathname}?jobId=${qJobId}`;
+          window.history.replaceState(null, '', newUrl);
+        }
       }
     }
   }, []);
@@ -152,30 +156,57 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!activeJobId) return;
-    const interval = setInterval(async () => {
+
+    let isMounted = true;
+    let timer: NodeJS.Timeout | null = null;
+
+    const pollJob = async () => {
       try {
         const res = await authenticatedFetch(`${API_URL}/jobs/${activeJobId}`);
-        if (res.ok) {
-          const body = await res.json();
-          setJobStatus(body.data.status);
-          if (body.data.repository?.detectedStack) setDetectedStack(body.data.repository.detectedStack);
-          if (body.data.review?.findings) setJobFindings(body.data.review.findings);
-          if (isTerminal(body.data.status)) {
-            clearInterval(interval);
-            if (body.data.status === 'done') {
-              try {
-                const graphRes = await authenticatedFetch(`${API_URL}/jobs/${activeJobId}/graph`);
-                if (graphRes.ok) {
-                  const graphBody = await graphRes.json();
-                  setGraphData(graphBody.data);
-                }
-              } catch (e) { console.error('Failed to fetch graph data:', e); }
+        if (!res.ok) return;
+        const body = await res.json();
+        if (!isMounted) return;
+
+        setJobStatus(body.data.status);
+        if (body.data.repository?.name) {
+          setActiveRepoFullName(body.data.repository.name);
+        }
+        if (body.data.repository?.detectedStack) {
+          setDetectedStack(body.data.repository.detectedStack);
+        }
+        if (body.data.review?.findings) {
+          setJobFindings(body.data.review.findings);
+        }
+
+        if (isTerminal(body.data.status)) {
+          if (body.data.status === 'done') {
+            try {
+              const graphRes = await authenticatedFetch(`${API_URL}/jobs/${activeJobId}/graph`);
+              if (graphRes.ok && isMounted) {
+                const graphBody = await graphRes.json();
+                setGraphData(graphBody.data);
+              }
+            } catch (e) {
+              console.error('Failed to fetch graph data:', e);
             }
           }
+        } else {
+          timer = setTimeout(pollJob, 2000);
         }
-      } catch (err) { console.error(err); }
-    }, 2000);
-    return () => clearInterval(interval);
+      } catch (err) {
+        console.error(err);
+        if (isMounted) {
+          timer = setTimeout(pollJob, 3000);
+        }
+      }
+    };
+
+    pollJob();
+
+    return () => {
+      isMounted = false;
+      if (timer) clearTimeout(timer);
+    };
   }, [activeJobId, authenticatedFetch]);
 
   const handleSelectRepo = async (repoFullName: string) => {
@@ -193,6 +224,11 @@ export default function DashboardPage() {
       const body = await res.json();
       setActiveRepoFullName(repoFullName);
       setActiveJobId(body.data.jobId);
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('mentorqa_active_job_id', body.data.jobId);
+        const newUrl = `${window.location.pathname}?jobId=${body.data.jobId}`;
+        window.history.pushState(null, '', newUrl);
+      }
     } catch (err) {
       console.error(err);
       setJobStatus('failed');
@@ -204,6 +240,7 @@ export default function DashboardPage() {
       await fetch(`${API_URL}/auth/logout`, { method: 'POST', credentials: 'include' });
     } finally {
       sessionStorage.removeItem('access_token');
+      sessionStorage.removeItem('mentorqa_active_job_id');
       router.replace('/');
     }
   };
@@ -214,6 +251,10 @@ export default function DashboardPage() {
     setGraphData(null);
     setActiveJobId(null);
     setActiveRepoFullName(null);
+    if (typeof window !== 'undefined') {
+      sessionStorage.removeItem('mentorqa_active_job_id');
+      window.history.pushState(null, '', window.location.pathname);
+    }
   };
 
   if (loading) {
